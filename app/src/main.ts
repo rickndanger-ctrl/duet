@@ -4,6 +4,7 @@ import * as api from './api';
 import { Duet, DEFAULT_SETTINGS } from './duet';
 import { Glasses, type MenuItem } from './glasses';
 import type { Phase, Turn } from './screen';
+import { animation } from './mascot';
 
 const MENU_WAKE = 1, MENU_NEW = 2, MENU_CLOSE = 3;
 
@@ -93,6 +94,7 @@ duet = new Duet({
     drawLog();
   },
   onPhase: p => {
+    animateBuddy(p);
     $('phase').textContent = PHASE_TEXT[p];
     $('phase').dataset.phase = p;
     $('live').textContent = duet?.turn ? `» ${duet.turn.you}` : PHASE_TEXT[p];
@@ -106,6 +108,16 @@ duet = new Duet({
     bar.classList.toggle('on', speaking);
   },
 });
+
+// The buddy in the corner of the lens acts out the phase.
+let buddyTimer: ReturnType<typeof setInterval> | undefined;
+function animateBuddy(p: Phase): void {
+  clearInterval(buddyTimer);
+  const { poses, ms } = animation(p);
+  let i = 0;
+  glasses.buddy(poses[0]);
+  if (poses.length > 1) buddyTimer = setInterval(() => glasses.buddy(poses[++i % poses.length]), ms);
+}
 
 // ---- settings ---------------------------------------------------------------
 async function save(): Promise<void> {

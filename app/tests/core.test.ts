@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Vad } from '../src/vad.ts';
-import { matchWake, isRealSpeech, yesNo } from '../src/wake.ts';
+import { matchWake, isRealSpeech, yesNo, isPause } from '../src/wake.ts';
 import { frame, statusLine, wrap, COLS, BODY_LINES, glassesSafe } from '../src/screen.ts';
 import { Duet } from '../src/duet.ts';
 import type { ChatEvent } from '../src/api.ts';
@@ -79,7 +79,9 @@ test('whisper phantoms are not speech', () => {
 test('layout: wrap, status line, follow and scroll', () => {
   const lines = wrap('word '.repeat(100));
   assert.ok(lines.every(l => l.length <= COLS));
-  assert.ok(statusLine('your-turn').startsWith('DUET'));
+  assert.ok(statusLine('your-turn').startsWith('TALK NOW'));
+  for (const p of ['transcribing', 'thinking', 'working', 'answering'] as const) assert.ok(statusLine(p).startsWith('WAIT'), p);
+  assert.match(statusLine('confirm', 'Move'), /^Move\?  SAY YES OR NO$/);
   const f = frame('S', lines, null);
   assert.equal(f.scroll, f.maxScroll);
   assert.ok(!f.text.endsWith('▼'));
@@ -231,4 +233,9 @@ test('double tap says no; noise and "okay" do not answer', async () => {
   await settle(30);
   assert.deepEqual(h.confirms, [{ id: 'c1', ok: false }]);
   assert.ok(h.shown.at(-1)!.includes('Not sent.'));
+});
+
+test('pause phrases stop listening; questions do not', () => {
+  for (const t of ['Pause.', 'pause', 'Stop listening', "That's all.", 'Thanks Duet', 'Okay, pause', 'Hey Duet, pause']) assert.equal(isPause(t), true, t);
+  for (const t of ['Pause the music in the kitchen please now', 'What time is it?', 'Stopwatch for five minutes', 'yes']) assert.equal(isPause(t), false, t);
 });

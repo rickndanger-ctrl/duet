@@ -4,7 +4,7 @@
 import type { ChatEvent } from './api';
 import { frame, statusLine, turnLines, wrap, type Phase, type Turn, BODY_LINES } from './screen';
 import { Vad } from './vad';
-import { isRealSpeech, matchWake, yesNo } from './wake';
+import { isPause, isRealSpeech, matchWake, yesNo } from './wake';
 
 export interface DuetDeps {
   show: (text: string, now?: boolean) => void;
@@ -187,7 +187,10 @@ export class Duet {
       const text = await this.stt(pcm, 'talk', gen);
       if (gen !== this.gen) return;
       if (text === null) return; // error already shown
-      if (!isRealSpeech(text)) { this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
+      if (isPause(text)) { this.d.log('pause'); return this.sleep(); }
+      // Waiting for a follow-up, one word is usually a noise heard as a word (a door squeak became "screams").
+      const followUp = this.turn !== null && !this.greeting;
+      if (!isRealSpeech(text) || (followUp && words(text) < 2)) { this.d.log(`ignored "${text.slice(0, 40)}"`); this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
       return void this.ask(text);
     }
     // "Send it?" answered by voice.
@@ -202,7 +205,11 @@ export class Duet {
     // Talking over an answer (barge-in): a real sentence replaces it.
     if (BUSY.includes(phase)) {
       const text = await this.stt(pcm, 'talk', gen, true);
-      if (gen !== this.gen || text === null || !isRealSpeech(text) || words(text) < 2) return;
+      if (gen !== this.gen || text === null) return;
+      if (isPause(text)) { this.d.log('pause'); return this.sleep(); }
+      if (!isRealSpeech(text) || words(text) < 2) return;
+      // A leftover "yes yes" or "okay" after a confirm is not a new question: don't cut the answer off for it.
+      if (yesNo(text) !== null && words(text) <= 4) { this.d.log('ignored short reply while busy'); return; }
       this.d.log('barge-in');
       this.stopAnswer('interrupted');
       return void this.ask(text);
@@ -328,13 +335,17 @@ export class Duet {
 
   private lines(): string[] {
     if (this.phase === 'confirm' && this.confirmReq) {
-      return [...wrap(this.confirmReq.prompt), '', `Say "yes" or "no".  Tap = yes, double tap = no.`];
+      const verb = this.confirmReq.verb.toLowerCase();
+      return [...wrap(this.confirmReq.prompt), '', `Say YES to ${verb}, NO to cancel.`, '(tap = yes, double tap = no)'];
     }
     if (this.greeting && this.awake) return this.turn ? [...turnLines(this.turn, ''), '', this.greeting] : turnLines(null, this.greeting);
     const placeholder = this.phase === 'armed' ? 'Say "Hey Duet" and ask me anything.\n\nOr tap to talk.'
       : this.phase === 'asleep' ? 'Tap and ask me anything.\n\nTurn on "Hey Duet" in the menu to wake me by voice.'
         : "I'm listening. Go ahead.";
-    return turnLines(this.turn, placeholder);
+    const lines = turnLines(this.turn, placeholder);
+    // On your turn, say how to stop: Duet keeps listening otherwise.
+    if (this.phase === 'your-turn' || this.phase === 'listening') return [...lines, '', 'Say "pause" or double tap to stop listening.'];
+    return lines;
   }
 
   render(now = false): void {

@@ -5,26 +5,27 @@
 export const COLS = 56;
 /** Body lines under the status line. */
 export const BODY_LINES = 8;
-/** The divider: '─' is wide in the G2 font; this many fill most of the line without wrapping. */
-const RULE = 26;
+/** The divider: '─' is wide in the G2 font; this many stop short of the buddy in the top-right corner. */
+const RULE = 21;
 
 export type Phase = 'asleep' | 'armed' | 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'working' | 'answering' | 'your-turn' | 'confirm' | 'error';
 
+/** Whether the wearer should talk now or wait: the status line says it in plain words. */
 export function statusLine(phase: Phase, note = ''): string {
   const label: Record<Phase, string> = {
-    asleep: 'tap to talk',
-    armed: 'say "Hey Duet"',
-    listening: 'listening…',
-    hearing: 'hearing you…',
-    transcribing: 'got it…',
-    thinking: 'thinking…',
-    working: (note || 'working') + '…',
-    confirm: `${note || 'Send'}?  yes / no`,
-    answering: 'answering…',
-    'your-turn': 'your turn - just talk',
+    asleep: 'PAUSED  ·  tap to talk',
+    armed: 'PAUSED  ·  say "Hey Duet"',
+    listening: 'TALK NOW  ·  listening',
+    hearing: 'TALK NOW  ·  hearing you…',
+    transcribing: 'WAIT  ·  got it…',
+    thinking: 'WAIT  ·  thinking…',
+    working: `WAIT  ·  ${note || 'working'}…`,
+    answering: 'WAIT  ·  answering…',
+    'your-turn': 'TALK NOW  ·  your turn',
+    confirm: `${note || 'Send'}?  SAY YES OR NO`,
     error: '! ' + (note || 'something went wrong'),
   };
-  return `DUET  ·  ${label[phase]}`;
+  return label[phase];
 }
 
 /** Word wrap to `cols`; long words are split. Keeps blank lines (paragraphs). */

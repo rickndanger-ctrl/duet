@@ -33,3 +33,10 @@ export function yesNo(transcript: string): boolean | null {
   if (/^(yes|yeah|yep|yup|yes please|sure|send|send it|do it|go|go ahead|confirm|correct|that's right|sounds good|perfect|please do|add it|move it|absolutely|of course)\b/.test(t)) return true;
   return null;
 }
+
+/** "Pause", "stop listening", "that's all"...: the wearer wants Duet to stop listening for now. Short phrases only. */
+export function isPause(transcript: string): boolean {
+  const t = transcript.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.split(' ').length > 5) return false;
+  return /^(?:(?:ok(?:ay)?|hey duet|duet) )?(?:pause|stop listening|that's all|that's it|thanks duet|thank you duet|go to sleep|sleep|stop|we're done|i'm done)\b/.test(t);
+}
