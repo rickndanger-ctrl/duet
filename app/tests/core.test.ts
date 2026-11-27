@@ -61,6 +61,10 @@ test('wake phrase variants', () => {
   assert.equal(matchWake('Duet, set a timer'), 'set a timer');
   assert.equal(matchWake('Hi Dewitt'), '');
   assert.equal(matchWake('Okay Duet'), '');
+  // Real Groq Whisper output for macOS voices saying the phrases (2026-11-27).
+  assert.equal(matchWake('Hey, duet.'), '');
+  assert.equal(matchWake('Duet. Set a timer for 10 minutes.'), 'Set a timer for 10 minutes.');
+  assert.equal(matchWake('I told him about the pie shop yesterday.'), null);
   assert.equal(matchWake('do it now'), null);
   assert.equal(matchWake('I love the duet they played'), null);
   assert.equal(matchWake('hey there'), null);

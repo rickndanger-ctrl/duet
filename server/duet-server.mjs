@@ -51,7 +51,9 @@ function wav(pcm) {
   return Buffer.concat([h, pcm])
 }
 
-/** Speech to text (Groq Whisper). The wake prompt teaches Whisper how "Duet" is spelled. */
+const TALK_HINT = 'Duet, the assistant in my glasses.'
+
+/** Speech to text (Groq Whisper). */
 export async function transcribe(pcm, mode = 'talk') {
   if (FAKE) return mode === 'wake' ? 'Hey Duet, what can you do?' : 'Tell me a fun fact about octopuses.'
   if (!GROQ_KEY) throw new Error('speech-to-text key missing on the server')
@@ -61,12 +63,15 @@ export async function transcribe(pcm, mode = 'talk') {
   form.append('response_format', 'json')
   form.append('language', 'en')
   form.append('temperature', '0')
-  form.append('prompt', mode === 'wake' ? 'Hey Duet.' : 'Duet, the assistant in my glasses.')
+  // No hint in wake mode: a hint containing "Hey Duet" makes Whisper write it for plain noise.
+  if (mode === 'talk') form.append('prompt', TALK_HINT)
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST', headers: { Authorization: `Bearer ${GROQ_KEY}` }, body: form, signal: AbortSignal.timeout(15_000),
   })
   if (!res.ok) throw new Error(`speech service said ${res.status}`)
-  return String((await res.json()).text || '').trim()
+  const text = String((await res.json()).text || '').trim()
+  // On noise Whisper sometimes just repeats its hint back.
+  return text.replace(/[^a-z ]/gi, '').trim().toLowerCase() === TALK_HINT.replace(/[^a-z ]/gi, '').trim().toLowerCase() ? '' : text
 }
 
 /** Only well-formed user/assistant text turns, newest 40, starting with a user turn. */
