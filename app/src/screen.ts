@@ -8,7 +8,7 @@ export const BODY_LINES = 8;
 /** The divider: '─' is wide in the G2 font; this many fill most of the line without wrapping. */
 const RULE = 26;
 
-export type Phase = 'asleep' | 'armed' | 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'searching' | 'answering' | 'your-turn' | 'error';
+export type Phase = 'asleep' | 'armed' | 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'working' | 'answering' | 'your-turn' | 'confirm' | 'error';
 
 export function statusLine(phase: Phase, note = ''): string {
   const label: Record<Phase, string> = {
@@ -18,12 +18,13 @@ export function statusLine(phase: Phase, note = ''): string {
     hearing: 'hearing you…',
     transcribing: 'got it…',
     thinking: 'thinking…',
-    searching: 'searching the web…',
+    working: (note || 'working') + '…',
+    confirm: `${note || 'Send'}?  yes / no`,
     answering: 'answering…',
     'your-turn': 'your turn - just talk',
     error: '! ' + (note || 'something went wrong'),
   };
-  return `DUET  ·  ${phase === 'error' ? label.error : label[phase]}`;
+  return `DUET  ·  ${label[phase]}`;
 }
 
 /** Word wrap to `cols`; long words are split. Keeps blank lines (paragraphs). */

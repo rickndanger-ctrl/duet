@@ -44,7 +44,7 @@ function log(line: string): void {
 
 const PHASE_TEXT: Record<Phase, string> = {
   asleep: 'asleep: tap to talk', armed: 'waiting for "Hey Duet"', listening: 'listening', hearing: 'hearing you', transcribing: 'got it',
-  thinking: 'thinking', searching: 'searching the web', answering: 'answering', 'your-turn': 'your turn: just talk', error: 'error',
+  thinking: 'thinking', working: 'working', answering: 'answering', 'your-turn': 'your turn: just talk', confirm: 'waiting for your yes / no', error: 'error',
 };
 
 // Finished turns for the phone log (the live one is drawn separately).
@@ -83,8 +83,9 @@ duet = new Duet({
   show: (text, now) => glasses.show(text, now),
   mic: on => glasses.microphone(on),
   transcribe: (pcm, mode, signal) => api.transcribe(server, pcm, mode, signal),
-  chat: (messages, context, onEvent, signal) => api.chat(server, messages, context, onEvent, signal),
-  context: () => ({ time: new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', timeZoneName: 'short' }), ...(place ? { place } : {}) }),
+  chat: (conversation, text, context, onEvent, signal) => api.chat(server, conversation, text, context, onEvent, signal),
+  confirm: (id, ok) => api.confirm(server, id, ok),
+  context: () => ({ time: new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', timeZoneName: 'short' }), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(place ? { place } : {}) }),
   log,
   onTurn: (turn, phase) => {
     liveTurn = turn;

@@ -24,3 +24,12 @@ export function isRealSpeech(transcript: string): boolean {
   if (PHANTOMS.test(t)) return false;
   return /[a-z0-9]/i.test(t);
 }
+
+/** A spoken yes or no to "Send? / Add? / Move?". null = neither (keep waiting). */
+export function yesNo(transcript: string): boolean | null {
+  const t = transcript.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  if (/^(no|nope|nah|don't|do not|cancel|stop|wait|hold on|never ?mind|not yet|not now)\b/.test(t)) return false;
+  if (/^(yes|yeah|yep|yup|yes please|sure|send|send it|do it|go|go ahead|confirm|correct|that's right|sounds good|perfect|please do|add it|move it|absolutely|of course)\b/.test(t)) return true;
+  return null;
+}

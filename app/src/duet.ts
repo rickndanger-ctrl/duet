@@ -1,16 +1,18 @@
 // The conversation loop. Wake ("Hey Duet" or a tap) → you talk → Claude's answer streams onto the lens →
 // the mic is already open for your reply → … → quiet for a while → back to sleep.
 // No buttons inside a conversation: the end of your speech is the send button.
-import type { ChatEvent, ChatMessage } from './api';
-import { frame, statusLine, turnLines, type Phase, type Turn, BODY_LINES } from './screen';
+import type { ChatEvent } from './api';
+import { frame, statusLine, turnLines, wrap, type Phase, type Turn, BODY_LINES } from './screen';
 import { Vad } from './vad';
-import { isRealSpeech, matchWake } from './wake';
+import { isRealSpeech, matchWake, yesNo } from './wake';
 
 export interface DuetDeps {
   show: (text: string, now?: boolean) => void;
   mic: (on: boolean) => Promise<boolean>;
   transcribe: (pcm: Uint8Array, mode: 'wake' | 'talk', signal: AbortSignal) => Promise<string>;
-  chat: (messages: ChatMessage[], context: Record<string, string>, onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>;
+  chat: (conversation: string, text: string, context: Record<string, string>, onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>;
+  /** The wearer's yes/no to an action Claude prepared (send an email, move a meeting). */
+  confirm: (id: string, ok: boolean) => Promise<void>;
   context: () => Record<string, string>;
   log: (line: string) => void;
   /** Phone page mirror: every turn as it changes. */
@@ -32,12 +34,17 @@ export const DEFAULT_SETTINGS: DuetSettings = { wakeWord: true, sensitivity: 6, 
 const WAKE_MAX_SPEECH_MS = 6000;
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+const newId = () => (globalThis.crypto?.randomUUID?.() ?? `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
+/** Phases where Claude is busy with this turn (talking over them interrupts). */
+const BUSY: Phase[] = ['thinking', 'working', 'answering'];
 
 export class Duet {
   phase: Phase = 'asleep';
   private note = '';
   settings: DuetSettings;
-  private history: ChatMessage[] = [];
+  /** The server keeps the conversation (tool calls included); this names it. */
+  private conversation = newId();
+  private confirmReq: { id: string; verb: string; prompt: string } | null = null;
   private lastTurnAt = 0;
   turn: Turn | null = null;
   private scroll: number | null = null;
@@ -72,15 +79,16 @@ export class Duet {
 
   gesture(g: 'tap' | 'double' | 'up' | 'down'): void {
     if (g === 'up' || g === 'down') return this.scrollBy(g === 'up' ? -(BODY_LINES - 2) : BODY_LINES - 2);
+    if (this.phase === 'confirm' && (g === 'tap' || g === 'double')) return this.answerConfirm(g === 'tap', 'touch');
     if (g === 'double') { if (this.awake) this.sleep(); return; }
     // Tap.
     switch (this.phase) {
       case 'asleep': case 'armed': case 'error': return this.listen(true);
       case 'hearing': if (this.vad.flush()) this.d.log('tap: sent now'); return;
-      case 'thinking': case 'searching': case 'answering':
+      case 'thinking': case 'working': case 'answering':
         this.stopAnswer('stopped');
         return this.listen(false);
-      case 'listening': case 'your-turn': case 'transcribing': return;
+      case 'listening': case 'your-turn': case 'transcribing': case 'confirm': return;
     }
   }
 
@@ -103,7 +111,7 @@ export class Duet {
 
   newConversation(): void {
     this.stopAnswer('new');
-    this.history = [];
+    this.conversation = newId();
     this.turn = null;
     this.sleep();
   }
@@ -182,8 +190,17 @@ export class Duet {
       if (!isRealSpeech(text)) { this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
       return void this.ask(text);
     }
+    // "Send it?" answered by voice.
+    if (phase === 'confirm') {
+      const text = await this.stt(pcm, 'talk', gen, true);
+      if (gen !== this.gen || text === null || this.phase !== 'confirm') return;
+      const answer = yesNo(text);
+      this.d.log(`confirm heard: ${answer === null ? 'neither' : answer ? 'yes' : 'no'}`);
+      if (answer !== null) this.answerConfirm(answer, 'voice');
+      return;
+    }
     // Talking over an answer (barge-in): a real sentence replaces it.
-    if (phase === 'thinking' || phase === 'searching' || phase === 'answering') {
+    if (BUSY.includes(phase)) {
       const text = await this.stt(pcm, 'talk', gen, true);
       if (gen !== this.gen || text === null || !isRealSpeech(text) || words(text) < 2) return;
       this.d.log('barge-in');
@@ -215,8 +232,7 @@ export class Duet {
     const gen = this.gen;
     clearTimeout(this.followTimer);
     this.greeting = '';
-    if (Date.now() - this.lastTurnAt > this.settings.memoryMs) this.history = [];
-    this.history.push({ role: 'user', content: text });
+    if (this.lastTurnAt && Date.now() - this.lastTurnAt > this.settings.memoryMs) this.conversation = newId();
     this.turn = { you: text, duet: '' };
     this.scroll = null;
     this.setPhase('thinking', true);
@@ -227,9 +243,10 @@ export class Duet {
     let firstAt = 0;
     let failed = '';
     try {
-      await this.d.chat(this.history.slice(), this.d.context(), e => {
+      await this.d.chat(this.conversation, text, this.d.context(), e => {
         if (gen !== this.gen) return;
-        if (e.t === 'search') this.setPhase('searching');
+        if (e.t === 'status') this.setPhase('working', false, e.text);
+        else if (e.t === 'confirm') this.askConfirm(e);
         else if (e.t === 'delta') {
           if (!firstAt) { firstAt = performance.now(); this.d.log(`first words ${Math.round(firstAt - t0)} ms`); }
           this.turn!.duet += e.text;
@@ -242,11 +259,8 @@ export class Duet {
     if (this.answerAbort === abort) this.answerAbort = null;
     if (gen !== this.gen) return;
     this.lastTurnAt = Date.now();
-    if (failed && !this.turn!.duet.trim()) {
-      this.history.pop();
-      return this.fail(failed);
-    }
-    this.history.push({ role: 'assistant', content: this.turn!.duet.trim() || '(no answer)' });
+    this.confirmReq = null;
+    if (failed && !this.turn!.duet.trim()) return this.fail(failed);
     this.d.log(`answer done ${Math.round(performance.now() - t0)} ms`);
     // Your turn: the mic is already on, just talk.
     this.vad.options.endSilenceMs = 800;
@@ -261,13 +275,30 @@ export class Duet {
     if (!abort) return;
     this.answerAbort = null;
     abort.abort();
-    this.d.log(`answer stopped (${why})`);
-    const said = this.turn?.duet.trim();
-    if (this.history.at(-1)?.role === 'user') {
-      if (said) this.history.push({ role: 'assistant', content: `${said} [cut off: the wearer interrupted]` });
-      else this.history.pop();
-    }
+    this.d.log(`answer stopped (${why})`); // the server closes the turn and keeps what was said
+    this.confirmReq = null;
     this.lastTurnAt = Date.now();
+  }
+
+  // ---- confirming actions ------------------------------------------------
+
+  /** Claude prepared an action: show the exact draft and wait for yes / no (voice, or tap / double tap). */
+  private askConfirm(req: { id: string; verb: string; prompt: string }): void {
+    this.confirmReq = req;
+    this.scroll = null;
+    this.vad.reset();
+    this.vad.options.endSilenceMs = 600;
+    this.setPhase('confirm', true, req.verb);
+    void this.syncMic();
+  }
+
+  private answerConfirm(ok: boolean, how: string): void {
+    const req = this.confirmReq;
+    if (!req) return;
+    this.confirmReq = null;
+    this.d.log(`confirm ${ok ? 'yes' : 'no'} by ${how}`);
+    this.setPhase('working', true, ok ? (req.verb === 'Send' ? 'sending' : 'saving') : 'cancelled');
+    this.d.confirm(req.id, ok).catch(e => this.d.log(`confirm failed: ${(e as Error).message}`));
   }
 
   private fail(note: string): void {
@@ -280,8 +311,8 @@ export class Duet {
 
   // ---- screen ------------------------------------------------------------
 
-  private setPhase(phase: Phase, now = false): void {
-    if (phase !== 'error') this.note = '';
+  private setPhase(phase: Phase, now = false, note = ''): void {
+    if (phase !== 'error') this.note = note;
     this.phase = phase;
     this.render(now);
     this.d.onPhase?.(phase);
@@ -296,6 +327,9 @@ export class Duet {
   }
 
   private lines(): string[] {
+    if (this.phase === 'confirm' && this.confirmReq) {
+      return [...wrap(this.confirmReq.prompt), '', `Say "yes" or "no".  Tap = yes, double tap = no.`];
+    }
     if (this.greeting && this.awake) return this.turn ? [...turnLines(this.turn, ''), '', this.greeting] : turnLines(null, this.greeting);
     const placeholder = this.phase === 'armed' ? 'Say "Hey Duet" and ask me anything.\n\nOr tap to talk.'
       : this.phase === 'asleep' ? 'Tap and ask me anything.\n\nTurn on "Hey Duet" in the menu to wake me by voice.'

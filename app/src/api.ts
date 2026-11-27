@@ -1,8 +1,12 @@
 // Client for the Duet server: speech-to-text and Claude's streamed answer.
 
 export interface ServerConfig { url: string; token: string }
-export interface ChatMessage { role: 'user' | 'assistant'; content: string }
-export type ChatEvent = { t: 'delta'; text: string } | { t: 'search' } | { t: 'done' } | { t: 'error'; message: string };
+export type ChatEvent =
+  | { t: 'delta'; text: string }
+  | { t: 'status'; text: string }
+  | { t: 'confirm'; id: string; verb: string; prompt: string }
+  | { t: 'done' }
+  | { t: 'error'; message: string };
 
 const base = (cfg: ServerConfig) => cfg.url.replace(/\/+$/, '');
 const auth = (cfg: ServerConfig): Record<string, string> => (cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {});
@@ -24,37 +28,56 @@ export async function transcribe(cfg: ServerConfig, pcm: Uint8Array, mode: 'wake
   return String((await res.json()).text ?? '');
 }
 
-/** Streams Claude's answer. Resolves when the stream ends; events arrive through onEvent. */
-export async function chat(cfg: ServerConfig, messages: ChatMessage[], context: Record<string, string>, onEvent: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
+/**
+ * One turn: starts it, then long-polls for its events until it is done. Aborting the signal cancels the turn on the server.
+ * (Long-poll rather than a streamed response: webviews hold small streamed chunks back.)
+ */
+export async function chat(cfg: ServerConfig, conversation: string, text: string, context: Record<string, string>, onEvent: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
   const res = await fetch(`${base(cfg)}/v1/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...auth(cfg) },
-    body: JSON.stringify({ messages, context }),
+    body: JSON.stringify({ conversation, text, context }),
     signal,
   });
   if (res.status === 401) throw new Error('server token is wrong');
-  if (!res.ok || !res.body) throw new Error(`Claude request failed (${res.status})`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let ended = false;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let cut: number;
-    while ((cut = buffer.indexOf('\n\n')) >= 0) {
-      const block = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 2);
-      for (const line of block.split('\n')) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const event = JSON.parse(line.slice(6)) as ChatEvent;
-          if (event.t === 'done' || event.t === 'error') ended = true;
-          onEvent(event);
-        } catch { /* a broken line is skipped */ }
+  if (!res.ok) throw new Error(res.status === 503 ? 'Claude is not set up on the server' : `Claude request failed (${res.status})`);
+  const { turn } = await res.json() as { turn: string };
+  const cancel = () => { void fetch(`${base(cfg)}/v1/turn/${turn}/cancel`, { method: 'POST', headers: auth(cfg) }).catch(() => {}); };
+  signal.addEventListener('abort', cancel, { once: true });
+  let after = 0;
+  let misses = 0;
+  try {
+    for (;;) {
+      let page: { events: ChatEvent[]; next: number; done: boolean };
+      try {
+        const r = await fetch(`${base(cfg)}/v1/turn/${turn}?after=${after}`, { headers: auth(cfg), signal });
+        if (!r.ok) throw new Error(`poll ${r.status}`);
+        page = await r.json();
+        misses = 0;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        if (++misses >= 4) throw new Error('lost the server');
+        await new Promise(r => setTimeout(r, 400 * misses));
+        continue;
       }
+      after = page.next;
+      for (const event of page.events) {
+        try { onEvent(event); } catch (e) { console.error('[duet] event handler failed', event.t, e); }
+      }
+      if (page.done) return;
     }
+  } finally {
+    signal.removeEventListener('abort', cancel);
   }
-  if (!ended) onEvent({ t: 'error', message: 'the answer was cut off' });
+}
+
+/** The wearer's yes/no to a confirm event. */
+export async function confirm(cfg: ServerConfig, id: string, ok: boolean): Promise<void> {
+  const res = await fetch(`${base(cfg)}/v1/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth(cfg) },
+    body: JSON.stringify({ id, ok }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`confirm failed (${res.status})`);
 }

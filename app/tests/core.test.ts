@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Vad } from '../src/vad.ts';
-import { matchWake, isRealSpeech } from '../src/wake.ts';
+import { matchWake, isRealSpeech, yesNo } from '../src/wake.ts';
 import { frame, statusLine, wrap, COLS, BODY_LINES, glassesSafe } from '../src/screen.ts';
 import { Duet } from '../src/duet.ts';
-import type { ChatEvent, ChatMessage } from '../src/api.ts';
+import type { ChatEvent } from '../src/api.ts';
 
 /** PCM of `ms` milliseconds: a 220 Hz tone at `amp`, plus a little noise. */
 function pcm(ms: number, amp: number): Uint8Array {
@@ -93,23 +93,33 @@ test('layout: wrap, status line, follow and scroll', () => {
 
 function harness(transcripts: string[], opts: { wakeWord?: boolean } = {}) {
   const shown: string[] = [];
-  const asked: ChatMessage[][] = [];
+  const asked: { conversation: string; text: string }[] = [];
+  const confirms: { id: string; ok: boolean }[] = [];
+  let confirmWaiter: ((ok: boolean) => void) | null = null;
   const micStates: boolean[] = [];
   const log: string[] = [];
   const duet = new Duet({
     show: t => shown.push(t),
     mic: async on => { micStates.push(on); return true; },
     transcribe: async () => transcripts.shift() ?? '',
-    chat: async (messages, _ctx, onEvent: (e: ChatEvent) => void) => {
-      asked.push(messages);
+    chat: async (conversation, text, _ctx, onEvent: (e: ChatEvent) => void) => {
+      asked.push({ conversation, text });
+      if (/email/i.test(text)) {
+        onEvent({ t: 'status', text: 'checking your mail' });
+        const ok = await new Promise<boolean>(r => { confirmWaiter = r; onEvent({ t: 'confirm', id: 'c1', verb: 'Send', prompt: 'Reply to Sam\n"See you at noon."' }); });
+        onEvent({ t: 'delta', text: ok ? 'Sent.' : 'Not sent.' });
+        onEvent({ t: 'done' });
+        return;
+      }
       for (const w of ['Sure, ', 'here ', 'you go.']) { await new Promise(r => setTimeout(r, 5)); onEvent({ t: 'delta', text: w }); }
       onEvent({ t: 'done' });
     },
+    confirm: async (id, ok) => { confirms.push({ id, ok }); confirmWaiter?.(ok); },
     context: () => ({}),
     log: l => log.push(l),
   }, { wakeWord: opts.wakeWord ?? true, followUpMs: 400 });
   const speak = (ms = 900) => { feed(c => duet.audio(c), pcm(300, 0)); feed(c => duet.audio(c), pcm(ms, 4000)); feed(c => duet.audio(c), pcm(1000, 0)); };
-  return { duet, shown, asked, micStates, log, speak };
+  return { duet, shown, asked, confirms, micStates, log, speak };
 }
 const settle = (ms = 60) => new Promise(r => setTimeout(r, ms));
 
@@ -121,7 +131,7 @@ test('hey duet + question in one breath, then a reply with no tap, then sleep', 
   h.speak();
   await settle(120);
   assert.equal(h.asked.length, 1);
-  assert.equal(h.asked[0].at(-1)!.content, 'what is a good pie for Thanksgiving?');
+  assert.equal(h.asked[0].text, 'what is a good pie for Thanksgiving?');
   assert.equal(h.duet.phase, 'your-turn');
   assert.ok(h.shown.at(-1)!.includes('here you go.'));
   assert.ok(h.shown.at(-1)!.includes('your turn'));
@@ -129,7 +139,8 @@ test('hey duet + question in one breath, then a reply with no tap, then sleep', 
   h.speak();
   await settle(120);
   assert.equal(h.asked.length, 2);
-  assert.deepEqual(h.asked[1].map(m => m.role), ['user', 'assistant', 'user']);
+  assert.equal(h.asked[1].conversation, h.asked[0].conversation, 'same conversation');
+  assert.equal(h.asked[1].text, 'And what goes with it?');
   // Then say nothing: back to waiting for the wake word.
   await settle(500);
   assert.equal(h.duet.phase, 'armed');
@@ -145,7 +156,7 @@ test('hey duet alone wakes and waits for the question', async () => {
   h.speak();
   await settle(120);
   assert.equal(h.asked.length, 1);
-  assert.equal(h.asked[0][0].content, 'Tell me a joke');
+  assert.equal(h.asked[0].text, 'Tell me a joke');
 });
 
 test('other talk does not wake it', async () => {
@@ -184,4 +195,40 @@ test('leaving the front closes the mic; coming back reopens it for the wake word
   h.duet.foreground(true);
   await settle(5);
   assert.equal(h.micStates.at(-1), true);
+});
+
+test('spoken yes / no', () => {
+  for (const t of ['Yes.', 'Yeah, send it.', 'Send it', 'Go ahead.', 'Sure!']) assert.equal(yesNo(t), true, t);
+  for (const t of ['No.', 'Nope', "Don't send it", 'Cancel.', 'Wait, change it']) assert.equal(yesNo(t), false, t);
+  for (const t of ['Okay.', 'Thank you.', 'you', 'what time is it', '']) assert.equal(yesNo(t), null, t);
+});
+
+test('an action waits on the lens and a spoken "yes" sends it', async () => {
+  const h = harness(['Reply to the email from Sam', 'Yes, send it.']);
+  h.duet.gesture('tap');
+  h.speak();
+  await settle(60);
+  assert.equal(h.duet.phase, 'confirm');
+  const lens = h.shown.at(-1)!;
+  assert.ok(lens.includes('Send?') && lens.includes('See you at noon.') && lens.includes('yes'), lens);
+  h.speak(500);
+  await settle(80);
+  assert.deepEqual(h.confirms, [{ id: 'c1', ok: true }]);
+  assert.equal(h.duet.phase, 'your-turn');
+  assert.ok(h.shown.at(-1)!.includes('Sent.'));
+});
+
+test('double tap says no; noise and "okay" do not answer', async () => {
+  const h = harness(['Reply to the email from Sam', 'Okay.', 'thank you']);
+  h.duet.gesture('tap');
+  h.speak();
+  await settle(60);
+  h.speak(400); await settle(40);
+  h.speak(400); await settle(40);
+  assert.equal(h.duet.phase, 'confirm');
+  assert.equal(h.confirms.length, 0);
+  h.duet.gesture('double');
+  await settle(30);
+  assert.deepEqual(h.confirms, [{ id: 'c1', ok: false }]);
+  assert.ok(h.shown.at(-1)!.includes('Not sent.'));
 });
