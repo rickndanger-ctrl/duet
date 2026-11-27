@@ -1,38 +1,121 @@
-# Duet
+# Duet: talk with Claude through your Even G2
 
-Claude in your Even Realities G2, as a real conversation: **you talk, Claude answers in text on the lens,
-you talk back. No buttons.**
+**Track 04 · AI Assistants & Work** (Claude + Google Calendar + Gmail)
 
-- **"Hey Duet"** wakes it (or tap the touch strip / ring). "Hey Duet, what's a good pie for Thanksgiving?" works in one breath.
-- Stop talking and it sends. Claude's answer streams onto the lens as it's written.
-- When the answer is done the mic is already open: just reply. Talk over an answer to interrupt it.
-- Quiet for 20 s and it goes back to waiting for "Hey Duet". Double tap ends a conversation.
-- Swipe to scroll a long answer. Claude searches the web for anything current (weather, news, hours).
+Duet is a hands-free conversation with Claude on Even Realities G2 glasses. You speak, Claude's answer
+appears on the lens, and you **just talk back**: no button between turns. It can also act on your day.
+It reads your calendar and mail, drafts replies and moves meetings. Nothing is sent or changed until
+you say **"yes"** to the exact draft on the lens.
+
+```
+ you:  "Hey Duet, anything from Sam?"
+ lens: DUET · checking your mail…
+ lens: Sam asks if lunch Friday at noon is still on.
+ you:  "Tell him yes, see you there"
+ lens: DUET · Send?  yes / no
+       Reply to Sam Lee
+       Re: Lunch Friday?
+       "Yes! See you there at noon."
+ you:  "Yes"
+ lens: Sent.
+```
+
+## The problem
+
+Asking an assistant something on the move means pulling out a phone, unlocking it, typing, reading.
+Voice assistants talk back out loud, which you can't use in a meeting, a shop or next to a sleeping kid.
+G2 has a private display and a microphone: the answer can be silent and only for you.
+
+## Who it's for
+
+Anyone wearing G2 through a working day: small-business owners on the shop floor, people walking between meetings, anyone who wants "what's next / reply to that / move it" without a screen.
 
 ## How it works
 
 ```
-G2 mic (16 kHz PCM) → voice detection on the phone (app/src/vad.ts)
-  → speech segment → server /v1/stt (Groq Whisper) → "Hey Duet" check (app/src/wake.ts) or your question
-  → server /v1/chat → Claude (claude-opus-5-5, low effort, web search), streamed back as SSE
-  → word-wrapped onto the lens (app/src/screen.ts), mic stays open for your reply (app/src/duet.ts)
+G2 mic (16 kHz PCM, while Duet is open)
+  → voice activity detection in the app (energy + adaptive noise floor)   app/src/vad.ts
+  → each spoken phrase → server /v1/stt → Groq Whisper (≈0.3 s)
+       asleep: is it "Hey Duet …"?  (fuzzy match, the rest becomes the question)   app/src/wake.ts
+       awake:  it's your turn → Claude
+  → server runs the turn with Claude (claude-opus-5-5, low effort) + tools:          server/duet-server.mjs
+       web search · calendar_events · gmail_search · gmail_read                       (run at once)
+       gmail_reply · gmail_send · calendar_create_event · calendar_update_event        (wait for your yes)
+  → app long-polls the turn: status ("checking your calendar…"), text, confirm requests
+  → word-wrapped onto the 576×288 lens (8 lines, swipe to scroll)                     app/src/screen.ts
+  → answer done: the mic is already open. Talk to continue; quiet for 20 s and it sleeps.  app/src/duet.ts
 ```
 
-Only speech segments leave the phone; silence never does. The server keeps nothing on disk.
+- **Wake**: say "Hey Duet" (works with the question in the same breath), or tap the temple / ring.
+- **Turn-taking**: the end of your sentence is the send button. Talking over an answer interrupts it.
+- **Confirm**: every write shows the exact draft and waits. Say "yes" / "send it" or tap to confirm.
+  Say "no" or double tap to cancel. No answer in 60 s means cancel. "Okay" doesn't count as yes,
+  because Whisper hears it in background noise.
+- **Memory**: the server keeps the conversation (tool calls included) for 30 min, so "reply to that one"
+  works. In memory only; nothing is written to disk. Audio is never stored. Only speech is sent, never silence.
 
-## Run it
+## Setup
 
-Server (keys in `~/.config/duet/`: `anthropic.key`, `groq.key`, `token`):
+Needs Node 20+, an [Anthropic API key](https://console.anthropic.com), a [Groq API key](https://console.groq.com)
+(speech-to-text) and, for calendar and mail, a Google OAuth client ([docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md)).
 
-    cd server && npm install && node duet-server.mjs          # :5191
-    DUET_FAKE=1 node duet-server.mjs                          # canned answers, no keys
+```bash
+# 1. Server (any machine your phone can reach over HTTPS)
+cd server && npm install
+mkdir -p ~/.config/duet && chmod 700 ~/.config/duet
+printf '%s' "$ANTHROPIC_API_KEY" > ~/.config/duet/anthropic.key
+printf '%s' "$GROQ_API_KEY"      > ~/.config/duet/groq.key
+openssl rand -hex 24             > ~/.config/duet/token      # the app's password for your server
+chmod 600 ~/.config/duet/*
+node google-auth.mjs ~/Downloads/client_secret_*.json        # optional: Calendar + Gmail
+node duet-server.mjs                                         # http://127.0.0.1:5191
+# put HTTPS in front (we use `tailscale serve --set-path /duet http://127.0.0.1:5191`)
 
-App:
+# 2. App
+cd ../app && npm install && npm run check                    # unit tests + build
+DUET_URL=https://your-server/duet DUET_TOKEN=$(cat ~/.config/duet/token) ../scripts/pack.sh
+#   → app/duet-0.1.0.ehpk for Even Hub
+# or, without packaging: the server also serves the built app at https://your-server/duet/app/;
+#   `npx evenhub qr -u https://your-server/duet/app/` and scan it in the Even app's developer tools
+```
 
-    cd app && npm install && npm run check
-    VITE_DUET_URL=https://your-server VITE_DUET_TOKEN=... npm run dev
-    npx evenhub qr ...                                         # load the dev build on the phone
-    npm run build && npx evenhub pack app.json dist            # .ehpk for Even Hub
+Try it without any keys: `DUET_FAKE=1 node duet-server.mjs` (scripted transcripts and answers, a fake
+calendar and inbox), then `npm run dev` in `app/` and `npx evenhub-simulator http://127.0.0.1:5190/`.
 
-The phone page has the settings: wake word on/off, mic sensitivity (with a live level meter),
-how long Duet waits for your reply, and the server URL/token.
+The phone screen has the settings: "Hey Duet" on/off, mic sensitivity with a live level meter, how long
+Duet waits for your reply, and the server URL/token.
+
+## Built during the hackathon
+
+Everything in this repo was written from Nov 27, 2026 on, during the hackathon. Nothing here existed before Nov 23.
+It uses these existing libraries and APIs: Even Hub SDK (`@evenrealities/even_hub_sdk`), Anthropic SDK
+(`@anthropic-ai/sdk`), Groq's Whisper API, Google Calendar and Gmail REST APIs, Vite and TypeScript.
+
+## Safety and privacy
+
+- Writes need an explicit yes on the lens, with the exact text shown. Duet has no delete scopes.
+- Email headers for replies are read from Gmail itself, never taken from the model. Header values are single-line,
+  so no header injection.
+- The server holds the keys; the app only holds a server token. No keys in this repo.
+- Audio is sent only while someone is speaking, is transcribed and dropped. Conversations live in server memory for 30 minutes.
+
+## Feature requests for the platforms
+
+1. **Even Hub SDK:** a low-power on-glasses wake word or "voice activity" event, so "Hey Duet" could work
+   with Duet in the background without streaming the mic.
+2. **Even Hub SDK:** streamed `fetch` responses delivered as they arrive in the webview (in the simulator small
+   chunks are held back until the response ends, so Duet long-polls).
+3. **Even Hub SDK:** a way to keep the mic open while the app isn't in front (opt-in, with an indicator).
+4. **Claude API:** a speech-in endpoint (audio content blocks) would remove the separate speech-to-text hop.
+5. **Gmail API:** a lightweight "draft reply suggestion" from Google's own models, to pair with confirm-on-glasses.
+
+## Layout
+
+```
+app/       Even Hub app (TypeScript, Vite): glasses link, VAD, wake word, conversation loop, lens layout, phone page
+server/    duet-server.mjs (STT, Claude turns, long-poll, confirm), tools.mjs, google.mjs, google-auth.mjs
+scripts/   pack.sh: build + .ehpk with your server baked in
+docs/      GOOGLE_SETUP.md
+```
+
+MIT licensed.
