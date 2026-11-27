@@ -1,0 +1,24 @@
+:root { color-scheme: dark; --bg: #14110f; --card: #1f1a17; --ink: #f2ebe5; --dim: #a8998d; --accent: #d97757; font-family: -apple-system, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); padding: 16px 14px 40px; line-height: 1.4; }
+header h1 { margin: 4px 0 0; font-size: 30px; letter-spacing: 0.5px; }
+header .sub { margin: 2px 0 14px; color: var(--dim); }
+.card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+h2 { font-size: 15px; margin: 0 0 8px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+ol { margin: 0; padding-left: 20px; } li { margin: 4px 0; }
+.row { display: flex; align-items: center; gap: 12px; }
+.pill { background: #2c2521; border-radius: 99px; padding: 4px 12px; font-weight: 600; white-space: nowrap; }
+.pill[data-phase="hearing"], .pill[data-phase="listening"], .pill[data-phase="your-turn"] { background: var(--accent); color: #1a0f0a; }
+.pill[data-phase="error"] { background: #7a2b2b; }
+#meter { flex: 1; height: 8px; background: #2c2521; border-radius: 99px; overflow: hidden; }
+#meter i { display: block; height: 100%; width: 0; background: var(--dim); transition: width 80ms linear; }
+#meter i.on { background: var(--accent); }
+.live { margin-top: 10px; color: var(--dim); min-height: 1.4em; }
+label { display: block; margin: 10px 0; }
+label.toggle { display: flex; gap: 10px; align-items: center; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input:not([type]), input[type=password] { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #3a322d; background: #120f0d; color: var(--ink); margin-top: 4px; }
+button { background: var(--accent); color: #1a0f0a; border: 0; border-radius: 10px; padding: 9px 14px; font-weight: 600; margin-top: 8px; }
+.log p { margin: 6px 0; } .log .you { color: var(--dim); } .log .you::before { content: '» '; } .log .duet { white-space: pre-wrap; }
+pre { white-space: pre-wrap; font-size: 11px; color: var(--dim); max-height: 300px; overflow: auto; }
+summary { cursor: pointer; color: var(--dim); }

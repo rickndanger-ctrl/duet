@@ -1,0 +1,26 @@
+// "Hey Duet" detection on Whisper transcripts of short utterances.
+// Whisper hears the name many ways; anything that sounds like it at the start counts.
+// Returns null (not a wake) or the words after the wake phrase ('' when there are none).
+
+const NAME = String.raw`(?:duet+e?|du[- ]?et|due[- ]?(?:it|et|at|ette?)|dewitt?|do[- ]?et|dueth?|douet|duette|juet|tuet|the[- ]?wet|dwet)`;
+const GREETING = String.raw`(?:hey|hi|hello|ok(?:ay)?|yo|a|hay|eh|ay)`;
+// "hey duet ..." or "duet, ..." at the start. "do it" alone is too common to count, but "hey do it" is accepted.
+const WAKE = new RegExp(String.raw`^\s*(?:(?:${GREETING})[\s,.!-]+(?:${NAME}|do[- ]it)|${NAME})(?=$|[\s,.!?:;-])[\s,.!?:;-]*`, 'i');
+
+export function matchWake(transcript: string): string | null {
+  const text = transcript.normalize('NFKC').replace(/[‘’]/g, "'").trim();
+  const m = WAKE.exec(text);
+  if (!m) return null;
+  return text.slice(m[0].length).trim();
+}
+
+/** Whisper's well-known phantom outputs on silence or noise. */
+const PHANTOMS = /^(?:thanks? (?:you )?(?:for watching|so much)?|thank you\.?|you|bye\.?|\.+|okay\.?|so\.?|uh+\.?|um+\.?|hmm+\.?|music|\[.*\]|\(.*\))[.!\s]*$/i;
+
+/** Whether a transcript is something someone actually said to Duet. */
+export function isRealSpeech(transcript: string): boolean {
+  const t = transcript.trim();
+  if (!t) return false;
+  if (PHANTOMS.test(t)) return false;
+  return /[a-z0-9]/i.test(t);
+}
