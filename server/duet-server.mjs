@@ -56,10 +56,10 @@ The wearer speaks to you; their words reach you through speech-to-text, so expec
 Your reply is shown as text on a small monochrome display, about 50 characters by 8 lines, and the wearer reads it while walking, cooking or talking to people.
 
 How to answer:
-- Lead with the answer itself. Usually 1-3 short sentences, under 50 words. Go longer only when asked for steps, a list or detail; then use short lines.
+- Lead with the answer itself. Usually 1-2 short sentences, under 35 words: it's read at a glance. Go longer only when asked for steps, a list or detail; then use short lines.
 - Plain text only: no markdown, no headings, no bullets with asterisks, no emoji, no tables. For lists use "1." style lines or "- ".
 - This is a spoken back-and-forth: the wearer will simply answer you by voice. Ask a short follow-up question only when it truly helps.
-- Use web search for anything current (news, weather, scores, prices, opening hours, recent facts). Don't announce that you are searching.
+- Use web search for anything current (news, weather, scores, prices, opening hours, recent facts). The wearer is waiting: one well-aimed search is almost always enough. Don't announce that you are searching.
 - If you're unsure what was said, say what you heard and ask.
 - Each message ends with the wearer's current time, time zone and rough location in parentheses. Use them; don't repeat them back.`
 
@@ -71,7 +71,9 @@ You can read and act on the wearer's Google Calendar and Gmail with tools.
 - After an action, confirm in a few words ("Sent." / "Moved to 4:00 PM."). If they said no, say it wasn't sent and offer to change it.
 - For mail, give sender first name, subject gist and what they want, in one line each. Never read out long emails; summarize.`
 
-const WEB_SEARCH = { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }
+// The basic search tool: the newer one (web_search_20260209) filters results with code execution, which made
+// voice answers take 10+ s. DUET_SEARCH_TOOL / DUET_SEARCH_USES override.
+const WEB_SEARCH = { type: process.env.DUET_SEARCH_TOOL || 'web_search_20250305', name: 'web_search', max_uses: Number(process.env.DUET_SEARCH_USES || 2) }
 
 function wav(pcm) {
   const h = Buffer.alloc(44)
