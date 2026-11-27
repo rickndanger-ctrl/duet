@@ -10,7 +10,9 @@
 //   ANTHROPIC_API_KEY | anthropic.key,  GROQ_API_KEY | groq.key,  DUET_TOKEN | token
 // Audio and conversation text are never written to disk or logs.
 import http from 'node:http'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
 import Anthropic from '@anthropic-ai/sdk'
@@ -26,6 +28,19 @@ const MODEL = process.env.DUET_MODEL || 'claude-opus-5-5'
 const EFFORT = process.env.DUET_EFFORT || 'low'
 /** DUET_FAKE=1: canned transcripts and answers, for the simulator and tests (no keys needed). */
 const FAKE = process.env.DUET_FAKE === '1'
+
+/** The built glasses app, served at /app/ so the phone can load it straight from here (dev QR). */
+const APP_DIR = process.env.DUET_APP_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'app', 'dist')
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' }
+
+async function serveApp(res, rel) {
+  try {
+    const file = path.resolve(APP_DIR, '.' + (rel === '/' || rel === '' ? '/index.html' : decodeURIComponent(rel)))
+    if (!file.startsWith(APP_DIR + path.sep) || !statSync(file).isFile()) throw new Error('missing')
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' })
+    res.end(await readFile(file))
+  } catch { res.writeHead(404); res.end('Not found') }
+}
 
 const anthropic = ANTHROPIC_KEY ? new Anthropic({ apiKey: ANTHROPIC_KEY }) : null
 
@@ -163,7 +178,11 @@ export const server = http.createServer(async (req, res) => {
   for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v)
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end() }
   const url = new URL(req.url, 'http://x')
-  const p = url.pathname.replace(/^\/duet(?=\/)/, '') // also served under a /duet path prefix
+  const p = url.pathname.replace(/^\/duet(?=\/|$)/, '') || '/' // also served under a /duet path prefix
+  if (req.method === 'GET' && (p === '/app' || p.startsWith('/app/'))) {
+    if (p === '/app') { res.writeHead(302, { Location: 'app/' }); return res.end() }
+    return serveApp(res, p.slice(4))
+  }
   if (p === '/health') return send(res, 200, { ok: true, claude: Boolean(anthropic) || FAKE, stt: Boolean(GROQ_KEY) || FAKE, model: MODEL })
   if (!FAKE && (!TOKEN || req.headers.authorization !== `Bearer ${TOKEN}`)) return send(res, 401, { error: 'unauthorized' })
   try {

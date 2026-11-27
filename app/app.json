@@ -10,7 +10,7 @@
     {
       "name": "network",
       "desc": "Sends what you say to the Duet server, which turns it into text and asks Claude for the answer.",
-      "whitelist": ["https://DUET-SERVER-HOST"]
+      "whitelist": ["https://YOUR-DUET-SERVER"]
     },
     {
       "name": "g2-microphone",

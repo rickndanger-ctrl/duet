@@ -8,7 +8,9 @@ import type { Phase, Turn } from './screen';
 const MENU_WAKE = 1, MENU_NEW = 2, MENU_CLOSE = 3;
 
 const env = import.meta.env as Record<string, string | undefined>;
-const server: api.ServerConfig = { url: env.VITE_DUET_URL || 'http://127.0.0.1:5191', token: env.VITE_DUET_TOKEN || '' };
+// Served by the Duet server itself (…/app/), the API is one level up; in development it's the local server.
+const sameServer = location.protocol === 'https:' && /\/app\/(index\.html)?$/.test(location.pathname) ? new URL('../', location.href).href : '';
+const server: api.ServerConfig = { url: env.VITE_DUET_URL || sameServer || 'http://127.0.0.1:5191', token: env.VITE_DUET_TOKEN || '' };
 
 // ---- phone page -------------------------------------------------------------
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
