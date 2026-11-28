@@ -1,0 +1,52 @@
+# Whisper (whisper-large-v3-turbo, wake mode: no prompt, temperature 0) on macOS voices saying "Hey Muse" phrases, 2026-11-27.
+# clip|transcript
+01-Samantha|Hey Muse!
+02-Samantha|Hey Muse, what time is it?
+03-Samantha|Hey, Muse, tell me a joke.
+04-Samantha|Muse, set a timer for five minutes.
+05-Samantha|Hey Muse what is on my calendar?
+06-Daniel|Hey Mews!
+07-Daniel|Hey Muse, what time is it?
+08-Daniel|Hey, Muse, tell me a joke.
+09-Daniel|Muse. Set a timer for 5 minutes.
+10-Daniel|Hey Muse, what is on my calendar?
+11-Karen|Hey Muse.
+12-Karen|Hey Mews, what time is it?
+13-Karen|Hey, Muse, tell me a joke.
+14-Karen|News, set a timer for five minutes.
+15-Karen|Hey Muse, what is on my calendar?
+16-Moira|Hey, muse.
+17-Moira|Hey Muse, what time is it?
+18-Moira|Hey, Muse, tell me a joke.
+19-Moira|Muse, set a timer for five minutes.
+20-Moira|Hey Muse, what is on my calendar?
+21-Tessa|Hey Muse.
+22-Tessa|Hey Muse, what time is it?
+23-Tessa|Hey, Muse, tell me a joke.
+24-Tessa|Muse, set a timer for five minutes.
+25-Tessa|hey muse, what is on my calendar?
+26-Rishi|Hey Muse!
+27-Rishi|Hey Muse, what time is it?
+28-Rishi|Hey, Muse, tell me a joke.
+29-Rishi|Musay, set a timer for 5 minutes.
+30-Rishi|Hey Muse, what is on my calendar?
+31-Fred|Hey, muse.
+32-Fred|Hey Muse, what time is it?
+33-Fred|Hey, Muse, tell me a joke.
+34-Fred|Muse, set timer for 5 minutes.
+35-Fred|Hey Muse, what is on my calendar?
+36-Reed|Hey Mews!
+37-Reed|Hey Muse, what time is it?
+38-Reed|Hey, Muse, tell me a joke.
+39-Reed|Muse. Set a timer for 5 minutes.
+40-Reed|Hey Muse, what is on my calendar?
+41-Flo|Hey Mews!
+42-Flo|Hey Muse, what time is it?
+43-Flo|Hey, Muse, tell me a joke.
+44-Flo|Muse. Set a timer for 5 minutes.
+45-Flo|Hey Muse, what is on my calendar?
+46-Shelley|Hey Mews!
+47-Shelley|Hey Muse, what time is it?
+48-Shelley|Hey, Muse, tell me a joke.
+49-Shelley|Muse. Set a timer for 5 minutes.
+50-Shelley|Hey Muse, what is on my calendar?

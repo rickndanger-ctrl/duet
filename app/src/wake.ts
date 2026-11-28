@@ -65,3 +65,46 @@ export function isPause(transcript: string): boolean {
   if (!t || t.split(' ').length > 5) return false;
   return /^(?:(?:ok(?:ay)?|hey duet|duet) )?(?:pause|stop listening|that's all|that's it|thanks duet|thank you duet|go to sleep|sleep|stop|we're done|i'm done)\b/.test(t);
 }
+
+// ---- the wake word per app --------------------------------------------------------------------------------------
+/** A wake word: what the lens calls it, how a transcript is matched, and how "pause" is said with it. */
+export interface WakeWord {
+  /** As shown on the lens and the phone ("Hey Duet"). */
+  label: string;
+  /** null = not a wake; otherwise the words after it ('' when there are none). */
+  match: (transcript: string) => string | null;
+  isPause: (transcript: string) => boolean;
+}
+
+/** Duet: "Hey Duet" (matchWake / isPause above, unchanged). */
+export const HEY_DUET: WakeWord = { label: 'Hey Duet', match: matchWake, isPause };
+
+// "Hey Muse" for the Muse build (Hey Muse). Whisper (large-v3-turbo, 10 macOS voices, 50 clips, 2026-11-27) wrote Muse 42 times,
+// "Mews" 5 times, and once each "News, …" and "Musay, …" for the bare name. After a greeting the looser spellings count;
+// on its own only the close ones do ("News" at the start of a sentence is too common to wake on).
+// Built on first use, so Duet's build doesn't carry it.
+let museWake: RegExp | undefined;
+function museWakeRe(): RegExp {
+  const name = String.raw`(?:muse|mews|muze|meuse|musay|musee|mus)`;
+  const loose = String.raw`(?:${name}|news|moose|mues|mewse|muses|music)`;
+  return museWake ??= new RegExp(String.raw`^\s*(?:(?:${GREETING})[\s,.!-]+${loose}|${name})(?=$|[\s,.!?:;-])[\s,.!?:;-]*`, 'i');
+}
+
+export function matchMuseWake(transcript: string): string | null {
+  const text = transcript.normalize('NFKC').replace(/[‘’]/g, "'").trim();
+  const m = museWakeRe().exec(text);
+  if (!m) return null;
+  return text.slice(m[0].length).trim();
+}
+
+/** "Pause", "thanks Muse"…: as isPause, with Muse's name. Also a short sentence that ends in a goodbye ("Alright Muse,
+ *  you can end the phone call if you want", "Okay, talk to you later"): people end a talk with Muse like a call. */
+export function isMusePause(transcript: string): boolean {
+  const t = transcript.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  const n = t.split(' ').length;
+  if (n <= 5 && /^(?:(?:ok(?:ay)?|hey muse|muse) )?(?:pause|stop listening|that's all|that's it|thanks muse|thank you muse|go to sleep|sleep|stop|we're done|i'm done)\b/.test(t)) return true;
+  return n <= 12 && /(?:end (?:the |this |our )?(?:phone )?(?:call|conversation|chat)|hang up|good ?bye|bye(?: bye)?|talk (?:to you )?later|good ?night|that's all for now|catch you later)(?: now| for now| muse| then| if you want| please)*$/.test(t);
+}
+
+export const HEY_MUSE: WakeWord = { label: 'Hey Muse', match: matchMuseWake, isPause: isMusePause };

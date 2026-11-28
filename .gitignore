@@ -13,3 +13,4 @@ demo/*.png
 demo/timeline.json
 demo/frames.txt
 demo/parts.txt
+dist-muse/

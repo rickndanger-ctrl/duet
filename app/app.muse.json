@@ -1,0 +1,25 @@
+{
+  "package_id": "com.piebird.duetmuse",
+  "edition": "202601",
+  "name": "Hey Muse",
+  "version": "0.2.1",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Sends what you say to the Hey Muse server, which turns it into text and asks your Muse for the answer.",
+      "whitelist": [
+        "https://YOUR-DUET-MUSE-SERVER"
+      ]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Hears \"Hey Muse\" and your questions while Hey Muse is open. Only speech is sent, never silence, and nothing is stored."
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}

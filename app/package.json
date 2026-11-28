@@ -8,6 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "test": "node --import tsx --test tests/*.test.ts",
     "check": "npm test && npm run build",
+    "dev:muse": "VITE_DUET_BRAIN=muse vite --host 0.0.0.0 --port 5193 --strictPort",
+    "build:muse": "tsc --noEmit && VITE_DUET_BRAIN=muse vite build --outDir dist-muse",
+    "check:muse": "npm test && npm run build:muse",
     "pack": "evenhub pack"
   },
   "dependencies": {

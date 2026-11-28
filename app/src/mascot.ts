@@ -41,14 +41,37 @@ const BODY_UP = [
   '...############...',
 ];
 
-/** One pose as W*H brightness values (0 = off, 255 = full). */
-export function sprite(pose: Pose): Uint8Array {
-  const g = new Uint8Array(W * H);
-  const set = (x: number, y: number, v = ON) => { if (x >= 0 && y >= 0 && x < W && y < H) g[y * W + x] = v; };
-  const rect = (x: number, y: number, w: number, h: number, v = ON) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) set(x + i, y + j, v); };
+/** A buddy's body: the rows above, the happy (arms up) version, and two leg rows that alternate while it works. */
+export interface BlockArt { body: string[]; bodyUp: string[]; legsA: string; legsB: string }
+/** A buddy drawn pixel by pixel (x 0..75; the effects use x 76..95), with its own gutter mark: rows of '#' (2x2 px each),
+ *  or `markImage`, a small picture drawn in grey (about 22 x 22, fits a 38 x 27 row). */
+export interface PixelArt { draw: (pose: Pose, set: (x: number, y: number, v?: number) => void) => void; mark: string[]; markImage?: (set: (x: number, y: number, v: number) => void) => void }
+export type Art = BlockArt | PixelArt;
+export const CLAUDE_ART: BlockArt = { body: BODY, bodyUp: BODY_UP, legsA: LEGS_A, legsB: LEGS_B };
 
+// The first Muse buddy (not the Claude character; Hey Muse now uses museguy.ts): a round spirit with a wavy hem that ripples while it works, and
+// sparkles beside it when it's happy.
+export const MUSE_ART: BlockArt = {
+  body: [
+    '......######......',
+    '...###e####e###...',
+    '..##############..',
+    '...############...',
+  ],
+  bodyUp: [
+    '#.....######.....#',
+    '...###e####e###...',
+    '..##############..',
+    '...############...',
+  ],
+  legsA: '...#.##.##.##.#...',
+  legsB: '....##.##.##.##...',
+};
+
+/** The block-built buddies (Claude, the Muse spirit): body rows of 4x8 px blocks, eyes, legs. */
+function drawBlocks(pose: Pose, art: BlockArt, set: (x: number, y: number, v?: number) => void, rect: (x: number, y: number, w: number, h: number, v?: number) => void): void {
   const bob = pose === 'talk1' ? -2 : 0;
-  const rows = [...(pose === 'happy' ? BODY_UP : BODY), pose === 'work2' ? LEGS_B : LEGS_A];
+  const rows = [...(pose === 'happy' ? art.bodyUp : art.body), pose === 'work2' ? art.legsB : art.legsA];
   const eyes: { x: number; y: number }[] = [];
   rows.forEach((row, r) => [...row].forEach((c, k) => {
     const x = OX + k * BW, y = OY + bob + r * BH;
@@ -66,6 +89,16 @@ export function sprite(pose: Pose): Uint8Array {
       default: break; // wide open
     }
   }
+}
+
+/** One pose as W*H brightness values (0 = off, 255 = full). */
+export function sprite(pose: Pose, art: Art = CLAUDE_ART): Uint8Array {
+  const g = new Uint8Array(W * H);
+  const set = (x: number, y: number, v = ON) => { if (x >= 0 && y >= 0 && x < W && y < H) g[y * W + x] = v; };
+  const rect = (x: number, y: number, w: number, h: number, v = ON) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) set(x + i, y + j, v); };
+
+  if ('draw' in art) art.draw(pose, set);
+  else drawBlocks(pose, art, set, rect);
 
   // Effects to the right of the body (x 76..95).
   const FX = 76;
@@ -140,15 +173,20 @@ const ME = [
   '10001.11111',
 ];
 
-/** One gutter image: the marks for its 4 rows ('me' = ME, 'claude' = a tiny Claude, null = nothing). */
-export function gutter(marks: ('me' | 'claude' | null)[]): Uint8Array {
+/** One gutter image: the marks for its 4 rows ('me' = ME, 'claude' = the tiny buddy, null = nothing). */
+export function gutter(marks: ('me' | 'claude' | null)[], art: Art = CLAUDE_ART): Uint8Array {
   const g = new Uint8Array(GUTTER_W * GUTTER_H);
   const rect = (x: number, y: number, w: number, h: number) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (x + i < GUTTER_W && y + j < GUTTER_H) g[(y + j) * GUTTER_W + x + i] = ON; };
   marks.slice(0, GUTTER_ROWS).forEach((m, r) => {
     const top = r * ROW_PX + MARK_Y;
-    if (m === 'claude') {
+    if (m === 'claude' && 'mark' in art && art.markImage) {
+      const y0 = r * ROW_PX + 2;
+      art.markImage((x, y, v) => { if (x >= 0 && x + 8 < GUTTER_W && y >= 0 && y0 + y < GUTTER_H && y < ROW_PX) g[(y0 + y) * GUTTER_W + 8 + x] = v; });
+    } else if (m === 'claude' && 'mark' in art) {
+      art.mark.forEach((row, k) => [...row].forEach((c, i) => { if (c === '#') rect(1 + i * 2, top + k * 2, 2, 2); }));
+    } else if (m === 'claude' && !('mark' in art)) {
       // The buddy at 2 x 4 px per block: 36 x 20.
-      [...BODY, LEGS_A].forEach((row, k) => [...row].forEach((c, i) => { if (c === '#') rect(1 + i * 2, top + k * 4, 2, 4); }));
+      [...art.body, art.legsA].forEach((row, k) => [...row].forEach((c, i) => { if (c === '#') rect(1 + i * 2, top + k * 4, 2, 4); }));
     } else if (m === 'me') {
       ME.forEach((row, k) => [...row].forEach((c, i) => { if (c === '1') rect(5 + i * 2, top + 3 + k * 2, 2, 2); }));
     }

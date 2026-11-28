@@ -1,6 +1,7 @@
 // Client for the Duet server: speech-to-text and Claude's streamed answer.
 
-export interface ServerConfig { url: string; token: string }
+/** `brain`: who answers, for error messages (default Claude). */
+export interface ServerConfig { url: string; token: string; brain?: string }
 export type ChatEvent =
   | { t: 'delta'; text: string }
   | { t: 'status'; text: string }
@@ -11,7 +12,7 @@ export type ChatEvent =
 const base = (cfg: ServerConfig) => cfg.url.replace(/\/+$/, '');
 const auth = (cfg: ServerConfig): Record<string, string> => (cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {});
 
-export async function health(cfg: ServerConfig): Promise<{ ok: boolean; claude?: boolean; stt?: boolean; model?: string }> {
+export async function health(cfg: ServerConfig): Promise<{ ok: boolean; claude?: boolean; muse?: boolean; stt?: boolean; model?: string }> {
   const res = await fetch(`${base(cfg)}/health`, { signal: AbortSignal.timeout(6000) });
   return res.json();
 }
@@ -40,7 +41,8 @@ export async function chat(cfg: ServerConfig, conversation: string, text: string
     signal,
   });
   if (res.status === 401) throw new Error('server token is wrong');
-  if (!res.ok) throw new Error(res.status === 503 ? 'Claude is not set up on the server' : `Claude request failed (${res.status})`);
+  const who = cfg.brain ?? 'Claude';
+  if (!res.ok) throw new Error(res.status === 503 ? `${who} is not set up on the server` : `${who} request failed (${res.status})`);
   const { turn } = await res.json() as { turn: string };
   const cancel = () => { void fetch(`${base(cfg)}/v1/turn/${turn}/cancel`, { method: 'POST', headers: auth(cfg) }).catch(() => {}); };
   signal.addEventListener('abort', cancel, { once: true });

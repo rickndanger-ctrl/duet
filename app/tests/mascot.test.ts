@@ -32,3 +32,14 @@ test('the gutter draws ME and a tiny Claude only on their rows', async () => {
   assert.deepEqual([0, 1, 2, 3].map(rowLit), [true, false, true, false]);
   assert.ok(gutter([null, null, null, null]).every(v => v === 0));
 });
+
+test('Duet Muse has its own buddy (not the Claude character) for every pose and in the gutter', async () => {
+  const { MUSE_ART, gutter } = await import('../src/mascot.ts');
+  for (const p of PHASES) for (const pose of animation(p).poses) {
+    const m = sprite(pose, MUSE_ART);
+    assert.ok(m.some(v => v > 0), `${pose} draws something`);
+    assert.ok(m.some((v, i) => v !== sprite(pose)[i]), `${pose} differs from Claude`);
+  }
+  assert.ok(!sprite('work1', MUSE_ART).every((v, i) => v === sprite('work2', MUSE_ART)[i]), 'the hem ripples while working');
+  assert.ok(gutter([null, 'claude', null, null], MUSE_ART).some((v, i) => v !== gutter([null, 'claude', null, null])[i]));
+});

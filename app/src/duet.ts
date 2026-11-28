@@ -4,7 +4,7 @@
 import type { ChatEvent } from './api';
 import { body, clock, frame, statusLine, turnBody, type Body, type Mark, type Phase, type Turn, BODY_LINES } from './screen';
 import { Vad } from './vad';
-import { confirmReply, isPause, isRealSpeech, isShortReply, matchWake, yesNo } from './wake';
+import { confirmReply, isRealSpeech, isShortReply, yesNo, HEY_DUET, type WakeWord } from './wake';
 
 export interface DuetDeps {
   /** The lens text, and who speaks on each of the 8 body rows (marks in the gutter). */
@@ -24,6 +24,13 @@ export interface DuetDeps {
   onLevel?: (level: number, speaking: boolean) => void;
   /** The time (tests set it). */
   now?: () => Date;
+  /** The wake word (default "Hey Duet"). */
+  wake?: WakeWord;
+  /** Silence that ends what you say (default 1 s). A slower assistant can afford to wait a little longer. */
+  talkEndSilenceMs?: number;
+  /** A lone "yeah" / "okay" after an answer goes out only when the answer asked something (default: also yes/no and
+   *  clearly heard short replies). For an assistant that takes a while to answer, a nod shouldn't cost a turn. */
+  shortRepliesOnlyIfAsked?: boolean;
 }
 
 export interface DuetSettings {
@@ -80,8 +87,12 @@ export class Duet {
   private inFront = true;
   private greeting = '';
   readonly vad: Vad;
+  private readonly wake: WakeWord;
+  private readonly talkEnd: number;
 
   constructor(private readonly d: DuetDeps, settings: Partial<DuetSettings> = {}) {
+    this.wake = d.wake ?? HEY_DUET;
+    this.talkEnd = d.talkEndSilenceMs ?? TALK_END_SILENCE_MS;
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
     this.vad = new Vad({
       onSpeechStart: () => this.onSpeechStart(),
@@ -175,7 +186,7 @@ export class Duet {
   private listen(fromTap: boolean): void {
     this.gen++;
     this.vad.reset();
-    this.vad.options.endSilenceMs = TALK_END_SILENCE_MS;
+    this.vad.options.endSilenceMs = this.talkEnd;
     this.vad.options.longAfterMs = TALK_LONG_AFTER_MS;
     this.vad.options.longEndSilenceMs = this.settings.pauseMs;
     if (fromTap && (!this.turn || Date.now() - this.lastTurnAt > this.settings.memoryMs)) this.greeting = "I'm listening. Go ahead.";
@@ -224,7 +235,7 @@ export class Duet {
       if (speechMs > WAKE_MAX_SPEECH_MS) return;
       const text = await this.stt(pcm, 'wake', gen);
       if (text === null || gen !== this.gen || this.phase !== 'armed') return;
-      const rest = matchWake(text);
+      const rest = this.wake.match(text);
       this.d.log(rest === null ? 'not a wake' : 'wake!');
       if (rest === null) return;
       if (isRealSpeech(rest) && words(rest) >= 2) return void this.ask(rest);
@@ -236,7 +247,7 @@ export class Duet {
       const text = await this.stt(pcm, 'talk', gen);
       if (gen !== this.gen) return;
       if (text === null) return; // error already shown
-      if (isPause(text)) { this.d.log('pause'); return this.sleep(); }
+      if (this.wake.isPause(text)) { this.d.log('pause'); return this.sleep(); }
       const said = this.withoutWake(text);
       if (said === '') { this.greeting = 'Yes?'; return this.listen(false); } // "Hey Duet" while already awake
       // Waiting for a follow-up, one word is usually a noise heard as a word (a door squeak became "screams"),
@@ -245,7 +256,7 @@ export class Duet {
       const followUp = this.turn !== null && !this.greeting;
       const asked = /\?["')\s]*$/.test(this.turn?.duet ?? '');
       const shortReply = isShortReply(said) && speechMs >= SHORT_REPLY_SPEECH_MS;
-      const oneWordOk = !followUp || asked || yesNo(said) !== null || shortReply;
+      const oneWordOk = !followUp || asked || (!this.d.shortRepliesOnlyIfAsked && (yesNo(said) !== null || shortReply));
       if (!(isRealSpeech(said) || shortReply) || (words(said) < 2 && !oneWordOk)) { this.d.log(`ignored "${said.slice(0, 40)}"`); this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
       return void this.ask(said);
     }
@@ -262,7 +273,7 @@ export class Duet {
     if (BUSY.includes(phase)) {
       const text = await this.stt(pcm, 'talk', gen, true);
       if (gen !== this.gen || text === null) return;
-      if (isPause(text)) { this.d.log('pause'); return this.sleep(); }
+      if (this.wake.isPause(text)) { this.d.log('pause'); return this.sleep(); }
       const said = this.withoutWake(text);
       if (!said || !isRealSpeech(said)) return;
       // You paused mid-sentence and went on before Claude answered: it's the rest of the same message.
@@ -297,7 +308,7 @@ export class Duet {
 
   /** The words after "Hey Duet" if it starts with it ('' = just the name); otherwise the text as is. */
   private withoutWake(text: string): string {
-    const rest = matchWake(text);
+    const rest = this.wake.match(text);
     return rest === null ? text : rest;
   }
 
@@ -338,7 +349,7 @@ export class Duet {
     if (failed && !this.turn!.duet.trim()) return this.fail(failed);
     this.d.log(`answer done ${Math.round(performance.now() - t0)} ms`);
     // Your turn: the mic is already on, just talk.
-    this.vad.options.endSilenceMs = TALK_END_SILENCE_MS;
+    this.vad.options.endSilenceMs = this.talkEnd;
     this.vad.options.longAfterMs = TALK_LONG_AFTER_MS;
     this.vad.options.longEndSilenceMs = this.settings.pauseMs;
     this.setPhase('your-turn', true);
@@ -416,19 +427,19 @@ export class Duet {
     // While you talk (and while it's being written down), your line is already there: "ME …".
     if (this.phase === 'hearing' || this.phase === 'transcribing') return body([...said, ...(this.greeting ? [{ who: 'claude' as Mark, text: this.greeting }] : []), { who: 'me', text: '…' }]);
     if (this.greeting && this.awake) return body([...said, { who: 'claude', text: this.greeting }]);
-    const placeholder = this.phase === 'armed' ? 'Say "Hey Duet" and ask me anything.\n\nOr tap to talk.'
-      : this.phase === 'asleep' ? 'Tap and ask me anything.\n\nTurn on "Hey Duet" in the menu to wake me by voice.'
+    const placeholder = this.phase === 'armed' ? `Say "${this.wake.label}" and ask me anything.\n\nOr tap to talk.`
+      : this.phase === 'asleep' ? `Tap and ask me anything.\n\nTurn on "${this.wake.label}" in the menu to wake me by voice.`
         : "I'm listening. Go ahead.";
     const b = turnBody(this.turn, placeholder);
     // On your turn, say how to stop (Duet keeps listening otherwise), when it fits without pushing the answer off the top.
     if (this.turn && (this.phase === 'your-turn' || this.phase === 'listening') && b.lines.length + 2 <= BODY_LINES) return body([{ who: 'me', text: this.turn.you }, { who: 'claude', text: this.turn.duet }, hint('Say "pause" or double tap to stop listening.')]);
     // Paused with an answer on screen: say how to wake.
-    if (this.turn && !this.awake && b.lines.length + 2 <= BODY_LINES) return body([{ who: 'me', text: this.turn.you }, { who: 'claude', text: this.turn.duet }, hint(this.phase === 'armed' ? 'Say "Hey Duet" or tap to talk.' : 'Tap to talk.')]);
+    if (this.turn && !this.awake && b.lines.length + 2 <= BODY_LINES) return body([{ who: 'me', text: this.turn.you }, { who: 'claude', text: this.turn.duet }, hint(this.phase === 'armed' ? `Say "${this.wake.label}" or tap to talk.` : 'Tap to talk.')]);
     return b;
   }
 
   render(now = false): void {
-    const f = frame(statusLine(this.phase, this.note), this.lines(), this.scroll);
+    const f = frame(statusLine(this.phase, this.note, this.wake.label), this.lines(), this.scroll);
     if (this.scroll !== null) this.scroll = f.scroll;
     this.d.show(f.text, now, f.marks);
     if (this.turn) this.d.onTurn?.(this.turn, this.phase);

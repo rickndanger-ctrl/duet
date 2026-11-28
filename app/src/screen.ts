@@ -25,10 +25,10 @@ export type Mark = 'me' | 'claude' | null;
 const cut = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 /** Whether the wearer should talk now or wait, in a few words (the clock has its own corner). */
-export function statusLine(phase: Phase, note = ''): string {
+export function statusLine(phase: Phase, note = '', wake = 'Hey Duet'): string {
   const label: Record<Phase, string> = {
     asleep: 'PAUSED · tap to talk',
-    armed: 'PAUSED · "Hey Duet"',
+    armed: `PAUSED · "${wake}"`,
     listening: 'TALK NOW',
     hearing: note ? 'HEARING · tap to send' : 'HEARING YOU…',
     transcribing: 'WAIT · got it…',

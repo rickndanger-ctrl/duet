@@ -6,24 +6,26 @@ import { Duet, DEFAULT_SETTINGS } from './duet';
 import { Glasses, type MenuItem } from './glasses';
 import type { Phase, Turn } from './screen';
 import { animation } from './mascot';
+import { BRAND } from './brand';
 
 const MENU_WAKE = 1, MENU_NEW = 2, MENU_CLOSE = 3;
 
 const env = import.meta.env as Record<string, string | undefined>;
 // Served by the Duet server itself (…/app/), the API is one level up; in development it's the local server.
 const sameServer = location.protocol === 'https:' && /\/app\/(index\.html)?$/.test(location.pathname) ? new URL('../', location.href).href : '';
-const server: api.ServerConfig = { url: env.VITE_DUET_URL || sameServer || 'http://127.0.0.1:5191', token: env.VITE_DUET_TOKEN || '' };
+const server: api.ServerConfig = { url: env.VITE_DUET_URL || sameServer || BRAND.devServer, token: env.VITE_DUET_TOKEN || '', brain: BRAND.assistant };
+if (BRAND.app !== 'Duet') document.title = BRAND.app;
 
 // ---- phone page -------------------------------------------------------------
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <header><h1>Duet</h1><p class="sub">Claude in your G2. Talk, read, talk back.</p></header>
+  <header><h1>${BRAND.app}</h1><p class="sub">${BRAND.tagline}</p></header>
   <section class="card" id="state-card"><div class="row"><span id="phase" class="pill">starting</span><span id="meter"><i></i></span></div>
-    <div id="live" class="live">Open Duet on your glasses.</div></section>
+    <div id="live" class="live">Open ${BRAND.app} on your glasses.</div></section>
   <section class="card"><h2>How to use it</h2>
-    <ol><li>Say <b>"Hey Duet"</b> (or tap the touch strip / ring).</li><li>Ask anything. Stop talking and it sends.</li>
+    <ol><li>Say <b>"${BRAND.wake.label}"</b> (or tap the touch strip / ring).</li><li>Ask anything. Stop talking and it sends.</li>
     <li>Read the answer, then just talk back. No buttons.</li><li>Double tap to end. Swipe to scroll a long answer.</li></ol></section>
   <section class="card"><h2>Settings</h2>
-    <label class="toggle"><input type="checkbox" id="wake"> "Hey Duet" wake word</label>
+    <label class="toggle"><input type="checkbox" id="wake"> "${BRAND.wake.label}" wake word</label>
     <label>Mic sensitivity <span id="sens-v"></span><input type="range" id="sens" min="1" max="10" step="1"></label>
     <label>Wait for your reply <span id="follow-v"></span><input type="range" id="follow" min="5" max="60" step="5"></label>
     <label>Pause before sending <span id="pause-v"></span><input type="range" id="pause" min="2" max="8" step="0.5"></label>
@@ -46,7 +48,7 @@ function log(line: string): void {
 }
 
 const PHASE_TEXT: Record<Phase, string> = {
-  asleep: 'asleep: tap to talk', armed: 'waiting for "Hey Duet"', listening: 'listening', hearing: 'hearing you', transcribing: 'got it',
+  asleep: 'asleep: tap to talk', armed: `waiting for "${BRAND.wake.label}"`, listening: 'listening', hearing: 'hearing you', transcribing: 'got it',
   thinking: 'thinking', working: 'working', answering: 'answering', 'your-turn': 'your turn: just talk', confirm: 'waiting for your yes / no', error: 'error',
 };
 
@@ -62,9 +64,9 @@ function drawLog(): void {
 // ---- glasses + loop -----------------------------------------------------------
 let duet: Duet;
 const menu = (): MenuItem[] => [
-  { id: MENU_WAKE, name: `Hey Duet: ${duet?.settings.wakeWord ?? true ? 'on' : 'off'}` },
+  { id: MENU_WAKE, name: `${BRAND.wake.label}: ${duet?.settings.wakeWord ?? true ? 'on' : 'off'}` },
   { id: MENU_NEW, name: 'New conversation' },
-  { id: MENU_CLOSE, name: 'Close Duet' },
+  { id: MENU_CLOSE, name: `Close ${BRAND.app}` },
 ];
 
 let place = '';
@@ -80,7 +82,7 @@ const glasses = new Glasses({
   onForeground: front => duet.foreground(front),
   onClosed: () => { $('phase').textContent = 'closed on the glasses'; },
   onLog: log,
-}, []);
+}, [], BRAND.art);
 
 duet = new Duet({
   show: (text, now, marks) => glasses.show(text, now, marks),
@@ -91,6 +93,8 @@ duet = new Duet({
   confirm: (id, ok, change) => api.confirm(server, id, ok, change),
   context: () => (refreshPlace(), { time: new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', timeZoneName: 'short' }), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(place ? { place } : {}) }),
   log,
+  wake: BRAND.wake,
+  ...BRAND.loop,
   onTurn: (turn, phase) => {
     liveTurn = turn;
     if (phase === 'your-turn' && !finished.includes(turn)) finished.push(turn);
@@ -125,7 +129,7 @@ function animateBuddy(p: Phase): void {
 
 // ---- settings ---------------------------------------------------------------
 async function save(): Promise<void> {
-  await glasses.storage.set('duet.settings', JSON.stringify({ ...duet.settings, url: server.url, token: server.token }));
+  await glasses.storage.set(`${BRAND.storageKey}.settings`, JSON.stringify({ ...duet.settings, url: server.url, token: server.token }));
 }
 function setWake(on: boolean): void {
   duet.setWakeWord(on);
@@ -159,7 +163,7 @@ $('test').addEventListener('click', async () => {
   $('test-r').textContent = '…';
   try {
     const h = await api.health(server);
-    $('test-r').textContent = h.ok ? `OK${h.claude ? '' : ' (no Claude key!)'}${h.stt ? '' : ' (no speech key!)'}` : 'not OK';
+    $('test-r').textContent = h.ok ? `OK${BRAND.ready(h) ? '' : ` (${BRAND.missing})`}${h.stt ? '' : ' (no speech key!)'}` : 'not OK';
   } catch (e) { $('test-r').textContent = `failed: ${(e as Error).message}`; }
 });
 
@@ -174,7 +178,7 @@ async function boot(): Promise<void> {
     log('voice detector: RNNoise');
   });
   try {
-    const saved = JSON.parse((await glasses.storage.get('duet.settings')) || '{}');
+    const saved = JSON.parse((await glasses.storage.get(`${BRAND.storageKey}.settings`)) || '{}');
     for (const k of Object.keys(DEFAULT_SETTINGS) as (keyof typeof DEFAULT_SETTINGS)[]) if (saved[k] !== undefined) (duet.settings as unknown as Record<string, unknown>)[k] = saved[k];
     duet.setSensitivity(duet.settings.sensitivity);
     duet.setPause(duet.settings.pauseMs);
@@ -192,12 +196,12 @@ async function boot(): Promise<void> {
 // (at most every few minutes) if it wasn't ready; the last one is kept so a restart still has it.
 let placeAt = 0;
 async function refreshPlace(force = false): Promise<void> {
-  if (!place) place = await glasses.storage.get('duet.place');
+  if (!place) place = await glasses.storage.get(`${BRAND.storageKey}.place`);
   if (!force && Date.now() - placeAt < 5 * 60_000) return;
   placeAt = Date.now();
   const at = await glasses.location();
   if (!at) { log('location not available'); return; }
   place = `around latitude ${at.lat.toFixed(1)}, longitude ${at.lon.toFixed(1)}`;
-  void glasses.storage.set('duet.place', place);
+  void glasses.storage.set(`${BRAND.storageKey}.place`, place);
 }
 void boot();

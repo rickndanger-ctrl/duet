@@ -12,6 +12,8 @@
 //
 // Keys come from the environment or files in DUET_CONFIG (default ~/.config/duet):
 //   ANTHROPIC_API_KEY | anthropic.key,  GROQ_API_KEY | groq.key,  DUET_TOKEN | token
+// Optional local speech-to-text: DUET_LOCAL_STT_URL, a whisper.cpp whisper-server (e.g. http://127.0.0.1:5194/inference),
+//   used when Groq refuses (its free tier allows 2000 transcriptions a day) or fails, or for everything without a Groq key.
 // Text messages: messages.mjs (macOS Messages through messages-helper.mjs; see docs/MESSAGES_SETUP.md).
 // Audio and conversation text are never written to disk or logs.
 import http from 'node:http'
@@ -33,6 +35,8 @@ const PORT = Number(process.env.PORT || 5191)
 const HOST = process.env.HOST || '127.0.0.1'
 const TOKEN = secret('DUET_TOKEN', 'token')
 const GROQ_KEY = secret('GROQ_API_KEY', 'groq.key')
+const GROQ_URL = process.env.DUET_GROQ_URL || 'https://api.groq.com/openai/v1/audio/transcriptions'
+const LOCAL_STT = process.env.DUET_LOCAL_STT_URL || ''
 const ANTHROPIC_KEY = secret('ANTHROPIC_API_KEY', 'anthropic.key')
 const MODEL = process.env.DUET_MODEL || 'claude-opus-5-5'
 const EFFORT = process.env.DUET_EFFORT || 'low'
@@ -107,9 +111,29 @@ const FAKE_TALK = ['Yes, send it.', 'Tell me a fun fact about octopuses.']
 let fakeTalk = 0
 const TALK_HINT = 'Duet, the assistant in my glasses.'
 
-/** Speech to text (Groq Whisper). */
+/** Speech to text: Groq Whisper, and the local whisper-server (DUET_LOCAL_STT_URL) when Groq refuses, fails or has no key.
+ *  Groq stays first: on the local base.en model "Hey Duet" is heard less reliably. */
 export async function transcribe(pcm, mode = 'talk') {
   if (FAKE) return mode === 'wake' ? 'Hey Duet, any email from Sam?' : FAKE_TALK[fakeTalk++ % FAKE_TALK.length]
+  try { return await groqTranscribe(pcm, mode) } catch (error) {
+    if (!LOCAL_STT) throw error
+    if (GROQ_KEY) console.log(`stt groq failed (${error?.message || error}), using local`)
+    return localTranscribe(pcm)
+  }
+}
+
+/** whisper.cpp's whisper-server: no quota. Its noise markers ("[BLANK_AUDIO]", "♪") are dropped. */
+async function localTranscribe(pcm) {
+  const form = new FormData()
+  form.append('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'speech.wav')
+  form.append('response_format', 'json')
+  form.append('temperature', '0')
+  const res = await fetch(LOCAL_STT, { method: 'POST', body: form, signal: AbortSignal.timeout(10_000) })
+  if (!res.ok) throw new Error(`local speech-to-text said ${res.status}`)
+  return String((await res.json()).text || '').replace(/[♪♫]|\[[^\]]*\]|\((?:music|silence|noise|blank_audio)[^)]*\)/gi, ' ').replace(/\s+/g, ' ').trim()
+}
+
+async function groqTranscribe(pcm, mode) {
   if (!GROQ_KEY) throw new Error('speech-to-text key missing on the server')
   const form = new FormData()
   form.append('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'speech.wav')
@@ -119,7 +143,7 @@ export async function transcribe(pcm, mode = 'talk') {
   form.append('temperature', '0')
   // No hint in wake mode: a hint containing "Hey Duet" makes Whisper write it for plain noise.
   if (mode === 'talk') form.append('prompt', TALK_HINT)
-  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+  const res = await fetch(GROQ_URL, {
     method: 'POST', headers: { Authorization: `Bearer ${GROQ_KEY}` }, body: form, signal: AbortSignal.timeout(15_000),
   })
   if (!res.ok) throw new Error(`speech service said ${res.status}`)
@@ -344,7 +368,7 @@ export const server = http.createServer(async (req, res) => {
     if (p === '/app') { res.writeHead(302, { Location: 'app/' }); return res.end() }
     return serveApp(res, p.slice(4))
   }
-  if (p === '/health') return send(res, 200, { ok: true, claude: Boolean(anthropic) || FAKE, stt: Boolean(GROQ_KEY) || FAKE, model: MODEL, google: Boolean(google), messages: Boolean(messages) })
+  if (p === '/health') return send(res, 200, { ok: true, claude: Boolean(anthropic) || FAKE, stt: Boolean(GROQ_KEY || LOCAL_STT) || FAKE, model: MODEL, google: Boolean(google), messages: Boolean(messages) })
   if (!FAKE && (!TOKEN || req.headers.authorization !== `Bearer ${TOKEN}`)) return send(res, 401, { error: 'unauthorized' })
   try {
     if (req.method === 'POST' && p === '/v1/stt') {
@@ -384,5 +408,5 @@ export const server = http.createServer(async (req, res) => {
 })
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)} google=${Boolean(google)} messages=${Boolean(messages)}${FAKE ? ' FAKE' : ''}${DEMO ? ' DEMO' : ''}`))
+  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)}${LOCAL_STT ? ' local-stt' : ''} google=${Boolean(google)} messages=${Boolean(messages)}${FAKE ? ' FAKE' : ''}${DEMO ? ' DEMO' : ''}`))
 }

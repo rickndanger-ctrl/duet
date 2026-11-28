@@ -17,7 +17,7 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
 import { glassesSafe } from './screen';
-import { W, H, sprite, gutter, GUTTER_W, GUTTER_H, GUTTER_ROWS, type Pose } from './mascot';
+import { W, H, sprite, gutter, GUTTER_W, GUTTER_H, GUTTER_ROWS, CLAUDE_ART, type Art, type Pose } from './mascot';
 import type { Mark } from './screen';
 
 export type Gesture = 'tap' | 'double' | 'up' | 'down';
@@ -85,7 +85,8 @@ export class Glasses {
   private gutterWanted = ['', ''];
   private gutterShown: (string | null)[] = [null, null];
 
-  constructor(private readonly ev: GlassesEvents, private menu: MenuItem[]) {}
+  /** `art`: the buddy drawn on the lens and in the gutter (Duet: the Claude character). */
+  constructor(private readonly ev: GlassesEvents, private menu: MenuItem[], private readonly art: Art = CLAUDE_ART) {}
 
   get connected(): boolean { return this.ready; }
   get front(): boolean { return this.inFront; }
@@ -218,7 +219,7 @@ export class Glasses {
     this.lastWrite = performance.now();
     try {
       const marks = key.split(',').map(m => (m || null) as Mark);
-      const bytes = await png(gutter(marks), GUTTER_W, GUTTER_H);
+      const bytes = await png(gutter(marks, this.art), GUTTER_W, GUTTER_H);
       const r = await withTimeout(this.sdk!.updateImageRawData(new ImageRawDataUpdate({ containerID: GUTTER_IDS[i], containerName: GUTTER_NAMES[i], imageData: bytes })), 'gutter');
       if (r !== ImageRawDataUpdateResult.success) throw new Error(String(r));
     } catch (e) {
@@ -253,7 +254,7 @@ export class Glasses {
     this.lastWrite = performance.now();
     try {
       let bytes = this.poseBytes.get(pose);
-      if (!bytes) { bytes = await png(sprite(pose), W, H); this.poseBytes.set(pose, bytes); }
+      if (!bytes) { bytes = await png(sprite(pose, this.art), W, H); this.poseBytes.set(pose, bytes); }
       const r = await withTimeout(this.sdk!.updateImageRawData(new ImageRawDataUpdate({ containerID: BUDDY_ID, containerName: BUDDY_NAME, imageData: bytes })), 'buddy');
       if (r !== ImageRawDataUpdateResult.success) throw new Error(String(r));
       this.shownPose = pose;

@@ -99,6 +99,23 @@ and speech-to-text against a made-up calendar, inbox and texts ([server/demo.mjs
 only change that demo data. The demo video was recorded this way: [demo/](demo/) drives the app in the simulator with
 spoken clips through a virtual mic and renders the video.
 
+### Optional: local speech-to-text (no daily limit)
+
+Groq's free tier allows 2000 transcriptions a day, and every phrase Duet hears while it listens for "Hey Duet" counts.
+If you hit the limit, Duet shows "speech-to-text failed". You can add a free local fallback that runs on the server's
+machine with [whisper.cpp](https://github.com/ggml-org/whisper.cpp). It's off unless you set it up, and Groq is still tried first.
+
+```bash
+brew install whisper-cpp                     # or build whisper.cpp from source on Linux
+curl -L -o ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+whisper-server -m ggml-base.en.bin --host 127.0.0.1 --port 5194 -l en -nt
+DUET_LOCAL_STT_URL=http://127.0.0.1:5194/inference node duet-server.mjs
+```
+
+With it set, Duet uses the local server whenever Groq refuses or fails, and for everything if there's no Groq key.
+It takes about 0.1 s per phrase on an Apple-silicon Mac. One trade-off: the small local model hears "Hey Duet" less
+reliably than Groq (in our test, 33 of 50 spoken clips against nearly all), so it works best as a fallback.
+
 The phone screen has the settings: "Hey Duet" on/off, mic sensitivity with a live level meter, how long
 Duet waits for your reply, and the server URL/token.
 
