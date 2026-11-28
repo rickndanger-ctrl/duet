@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Vad } from '../src/vad.ts';
 import { matchWake, isRealSpeech, yesNo, isPause, confirmReply } from '../src/wake.ts';
-import { frame, statusLine, wrap, COLS, BODY_LINES, glassesSafe } from '../src/screen.ts';
+import { body, frame, statusLine, turnBody, wrap, COLS, BODY_COLS, BODY_LINES, INDENT, STATUS_MAX, glassesSafe } from '../src/screen.ts';
 import { Duet } from '../src/duet.ts';
 import type { ChatEvent } from '../src/api.ts';
 
@@ -80,20 +80,38 @@ test('layout: wrap, status line, follow and scroll', () => {
   const lines = wrap('word '.repeat(100));
   assert.ok(lines.every(l => l.length <= COLS));
   assert.ok(statusLine('your-turn').startsWith('TALK NOW'));
-  for (const p of ['transcribing', 'thinking', 'working', 'answering'] as const) assert.ok(statusLine(p).startsWith('WAIT'), p);
-  assert.match(statusLine('confirm', 'Move'), /^Move\?  SAY YES OR NO$/);
-  const f = frame('S', lines, null);
+  for (const p of ['transcribing', 'thinking', 'answering'] as const) assert.ok(statusLine(p).startsWith('WAIT'), p);
+  assert.equal(statusLine('confirm', 'Move'), 'Move?  YES / NO');
+  for (const p of ['asleep', 'armed', 'listening', 'hearing', 'transcribing', 'thinking', 'answering', 'your-turn', 'confirm'] as const)
+    assert.ok(statusLine(p, 'checking your calendar').length <= STATUS_MAX, `${p} ends before the buddy`);
+  const b = body([{ who: null, text: 'word '.repeat(100) }]);
+  const f = frame('S', b, null);
   assert.equal(f.scroll, f.maxScroll);
   assert.ok(!f.text.endsWith('▼'));
-  const top = frame('S', lines, 0);
+  const top = frame('S', b, 0);
   assert.ok(top.text.endsWith('▼'));
   assert.equal(top.text.split('\n').length, 2 + BODY_LINES);
   assert.equal(glassesSafe('**Bold** 😀 “hi” — ok'), 'Bold  "hi" - ok');
+  assert.equal(glassesSafe('        * item'), '        - item', 'bullets keep the gutter indent');
+});
+
+test('layout: your whole message is shown, and the gutter marks who speaks', () => {
+  const you = 'And then sometimes when I talk longer and quicker it gets cut off and I cannot see the whole message on the lens.';
+  const t = turnBody({ you, duet: 'Got it. Long messages now show in full.' }, '');
+  const f = frame('S', t, null);
+  const rows = f.text.split('\n').slice(2);
+  assert.equal(rows.filter(r => r.trim()).map(r => r.trim()).join(' ').includes(you), true, 'all of it');
+  assert.equal(f.marks[0], 'me');
+  const claudeRow = rows.findIndex(r => r.includes('Got it.'));
+  assert.equal(f.marks[claudeRow], 'claude');
+  assert.equal(f.marks.filter(Boolean).length, 2);
+  assert.ok(rows.filter(r => r).every(r => r.startsWith(' '.repeat(INDENT))), 'every line leaves the gutter free');
+  assert.ok(rows.every(r => r.trim().length <= BODY_COLS + 3));
 });
 
 // ---- the loop, with a fake server ------------------------------------------------
 
-function harness(transcripts: string[], opts: { wakeWord?: boolean } = {}) {
+function harness(transcripts: string[], opts: { wakeWord?: boolean; thinkMs?: number } = {}) {
   const shown: string[] = [];
   const asked: { conversation: string; text: string }[] = [];
   const confirms: { id: string; ok: boolean }[] = [];
@@ -113,6 +131,7 @@ function harness(transcripts: string[], opts: { wakeWord?: boolean } = {}) {
         onEvent({ t: 'done' });
         return;
       }
+      if (opts.thinkMs) await new Promise(r => setTimeout(r, opts.thinkMs));
       for (const w of ['Sure, ', 'here ', 'you go.']) { await new Promise(r => setTimeout(r, 5)); onEvent({ t: 'delta', text: w }); }
       onEvent({ t: 'done' });
     },
@@ -245,5 +264,63 @@ test('a yes or no with a change in it redrafts instead of sending', () => {
   for (const t of ['No.', 'No thanks.', "No, don't send it.", 'Nope, not now', 'Cancel it.']) assert.deepEqual(confirmReply(t), { ok: false }, t);
   for (const t of ['No, say 20 minutes instead.', 'Yes, but make it Friday.', 'Wait, change the time to five.', 'No, send it to Sam instead'])
     assert.deepEqual(confirmReply(t), { ok: false, change: t }, t);
-  assert.equal(confirmReply('what time is it'), null);
+  assert.deepEqual(confirmReply('what time is it'), { ok: false, change: 'what time is it' }, 'a sentence goes to Claude instead of waiting');
+  assert.equal(confirmReply('okay'), null);
+  assert.equal(confirmReply('hmm'), null);
+});
+
+test('"Okay." after an answer is sent when clearly spoken, but not from a blip of noise', async () => {
+  const h = harness(['Hey Duet, what time is it?', 'Okay.', 'Okay.']);
+  h.duet.start();
+  h.speak(); await settle(120);
+  h.speak(200); await settle(80); // a blip Whisper heard as "Okay."
+  assert.equal(h.asked.length, 1);
+  h.speak(700); await settle(120);
+  assert.equal(h.asked.length, 2);
+  assert.equal(h.asked[1].text, 'Okay.');
+});
+
+test('"Hey Duet" while already awake just says Yes? and the name is not sent to Claude', async () => {
+  const h = harness(['Hey Duet, tell me a joke', 'Hey Duet.', 'Hey Duet, another one']);
+  h.duet.start();
+  h.speak(); await settle(120);
+  h.speak(600); await settle(60);
+  assert.equal(h.asked.length, 1);
+  assert.ok(h.shown.at(-1)!.includes('Yes?'));
+  h.speak(); await settle(120);
+  assert.equal(h.asked[1].text, 'another one');
+});
+
+test('a pause mid-sentence does not split the message: the rest joins it before Claude answers', async () => {
+  const h = harness(['Hey Duet, remind me that the hackathon', 'ends tomorrow at noon'], { thinkMs: 300 });
+  h.duet.start();
+  h.speak(); await settle(40);
+  assert.equal(h.duet.phase, 'thinking');
+  h.speak(); await settle(450);
+  assert.equal(h.asked.at(-1)!.text, 'remind me that the hackathon ends tomorrow at noon');
+  assert.equal(h.duet.phase, 'your-turn');
+});
+
+test('a sentence while a draft waits goes to Claude instead of being ignored', async () => {
+  const h = harness(['Reply to the email from Sam', 'so there were a lot of bugs today']);
+  h.duet.gesture('tap');
+  h.speak(); await settle(60);
+  assert.equal(h.duet.phase, 'confirm');
+  h.speak(); await settle(80);
+  assert.deepEqual(h.confirms, [{ id: 'c1', ok: false }], 'not sent, passed to Claude as what you said');
+});
+
+test('while you talk, your line already shows on the lens', async () => {
+  const h = harness(['Hey Duet, what time is it?']);
+  h.duet.start();
+  feed(c => h.duet.audio(c), pcm(300, 0));
+  feed(c => h.duet.audio(c), pcm(600, 4000)); // still talking
+  await settle(5);
+  assert.equal(h.duet.phase, 'armed', 'asleep: only the wake word');
+  h.duet.gesture('tap'); await settle(5);
+  feed(c => h.duet.audio(c), pcm(300, 0));
+  feed(c => h.duet.audio(c), pcm(600, 4000));
+  await settle(5);
+  assert.equal(h.duet.phase, 'hearing');
+  assert.ok(h.shown.at(-1)!.trimEnd().endsWith('…'), JSON.stringify(h.shown.at(-1)));
 });

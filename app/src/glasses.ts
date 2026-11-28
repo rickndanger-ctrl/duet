@@ -17,7 +17,8 @@ import {
   type EvenHubEvent,
 } from '@evenrealities/even_hub_sdk';
 import { glassesSafe } from './screen';
-import { W, H, sprite, type Pose } from './mascot';
+import { W, H, sprite, gutter, GUTTER_W, GUTTER_H, GUTTER_ROWS, type Pose } from './mascot';
+import type { Mark } from './screen';
 
 export type Gesture = 'tap' | 'double' | 'up' | 'down';
 export interface MenuItem { id: number; name: string }
@@ -35,8 +36,16 @@ const BOX_ID = 1;
 const BOX_NAME = 'duet-main';
 const BUDDY_ID = 2;
 const BUDDY_NAME = 'duet-buddy';
-/** The buddy sits in the top-right corner, beside the status line and the divider. */
-const BUDDY_X = 576 - W - 4, BUDDY_Y = 2;
+/** The buddy sits in the middle of the top row, over the conversation (not off in a corner). */
+const BUDDY_X = 250, BUDDY_Y = 2; // the body (72 px) centered; its effects go right
+/** The clock: a small text box in the top-right corner. */
+const CLOCK_ID = 3;
+const CLOCK_NAME = 'duet-clock';
+const CLOCK_X = 344;
+/** The gutter left of the conversation: two images of 4 rows each (images are at most 144 px tall). */
+const GUTTER_IDS = [4, 5];
+const GUTTER_NAMES = ['duet-gutter-a', 'duet-gutter-b'];
+const GUTTER_X = 4, GUTTER_Y = [62, 62 + GUTTER_H];
 const MAX_CHARS = 950;
 /** Text updates are Bluetooth writes: at most one in flight, and no faster than this. */
 const MIN_GAP_MS = 300;
@@ -69,6 +78,12 @@ export class Glasses {
   private pose: Pose = 'idle';
   private shownPose: Pose | null = null;
   private poseBytes = new Map<Pose, number[]>();
+  /** The clock text wanted in the corner and the one shown. */
+  private clockWanted = '';
+  private clockShown: string | null = null;
+  /** Gutter marks wanted / drawn, per image ('me,claude,,' style keys); null = not drawn since the page was built. */
+  private gutterWanted = ['', ''];
+  private gutterShown: (string | null)[] = [null, null];
 
   constructor(private readonly ev: GlassesEvents, private menu: MenuItem[]) {}
 
@@ -78,14 +93,25 @@ export class Glasses {
 
   private page(text: string) {
     return {
-      containerTotalNum: 2,
-      textObject: [new TextContainerProperty({
-        xPosition: 0, yPosition: 0, width: 576, height: 288, borderWidth: 0, paddingLength: 6,
-        containerID: BOX_ID, containerName: BOX_NAME, isEventCapture: 1, content: text, zOrderIndex: 1,
-      })],
-      imageObject: [new ImageContainerProperty({
-        xPosition: BUDDY_X, yPosition: BUDDY_Y, width: W, height: H, containerID: BUDDY_ID, containerName: BUDDY_NAME, zOrderIndex: 2,
-      })],
+      containerTotalNum: 5,
+      textObject: [
+        new TextContainerProperty({
+          xPosition: 0, yPosition: 0, width: 576, height: 288, borderWidth: 0, paddingLength: 6,
+          containerID: BOX_ID, containerName: BOX_NAME, isEventCapture: 1, content: text, zOrderIndex: 1,
+        }),
+        new TextContainerProperty({
+          xPosition: CLOCK_X, yPosition: 0, width: 576 - CLOCK_X, height: 40, borderWidth: 0, paddingLength: 6,
+          containerID: CLOCK_ID, containerName: CLOCK_NAME, isEventCapture: 0, content: this.clockWanted || ' ', zOrderIndex: 2,
+        }),
+      ],
+      imageObject: [
+        new ImageContainerProperty({
+          xPosition: BUDDY_X, yPosition: BUDDY_Y, width: W, height: H, containerID: BUDDY_ID, containerName: BUDDY_NAME, zOrderIndex: 3,
+        }),
+        ...GUTTER_IDS.map((id, i) => new ImageContainerProperty({
+          xPosition: GUTTER_X, yPosition: GUTTER_Y[i], width: GUTTER_W, height: GUTTER_H, containerID: id, containerName: GUTTER_NAMES[i], zOrderIndex: 4 + i, // each container needs its own layer
+        })),
+      ],
       menuObject: new MenuContainerProperty({ menuItems: this.menu.map(m => new MenuItemProperty({ itemID: m.id, itemName: m.name })) }),
     };
   }
@@ -106,6 +132,8 @@ export class Glasses {
       this.ready = true;
       this.shown = text;
       this.shownPose = null;
+      this.clockShown = this.clockWanted;
+      this.gutterShown = [null, null];
       this.ev.onLog('glasses connected');
       this.schedule();
       return true;
@@ -122,10 +150,19 @@ export class Glasses {
     this.schedule();
   }
 
-  /** Show this text. Only the newest text matters; older ones that never got out are skipped. `now` skips the pacing. */
-  show(text: string, now = false): void {
+  /** Show this text. Only the newest text matters; older ones that never got out are skipped. `now` skips the pacing.
+   *  `marks`: who speaks on each of the 8 body rows, drawn in the gutter right after the text. */
+  show(text: string, now = false, marks: Mark[] = []): void {
     this.wanted = glassesSafe(text).slice(0, MAX_CHARS) || ' ';
+    this.gutterWanted = [0, 1].map(i => marks.slice(i * GUTTER_ROWS, (i + 1) * GUTTER_ROWS).map(m => m ?? '').join(','));
     if (now) this.lastWrite = 0;
+    this.schedule();
+  }
+
+  /** The clock in the top-right corner. */
+  clock(text: string): void {
+    if (text === this.clockWanted) return;
+    this.clockWanted = text;
     this.schedule();
   }
 
@@ -138,14 +175,21 @@ export class Glasses {
 
   private schedule(): void {
     if (!this.ready || !this.inFront || this.writing || this.timer) return;
-    if (this.wanted === this.shown && !this.needRebuild && this.pose === this.shownPose) return;
+    if (this.wanted === this.shown && !this.needRebuild && this.pose === this.shownPose && this.clockWanted === this.clockShown
+      && this.gutterWanted.every((g, i) => g === (this.gutterShown[i] ?? ''))) return;
     const wait = Math.max(0, MIN_GAP_MS - (performance.now() - this.lastWrite));
     this.timer = setTimeout(() => { this.timer = undefined; void this.write(); }, wait);
   }
 
   private async write(): Promise<void> {
     if (!this.sdk || this.writing) return;
-    if (this.wanted === this.shown && !this.needRebuild && this.shown !== null) return this.drawBuddy();
+    if (this.wanted === this.shown && !this.needRebuild && this.shown !== null) {
+      // After the text: the gutter marks (they belong to it), then the clock, then the buddy.
+      const g = this.gutterWanted.findIndex((k, i) => k !== (this.gutterShown[i] ?? ''));
+      if (g >= 0) return this.drawGutter(g);
+      if (this.clockWanted !== this.clockShown) return this.drawClock();
+      return this.drawBuddy();
+    }
     const text = this.wanted;
     const rebuild = this.needRebuild || this.shown === null;
     this.writing = true;
@@ -156,12 +200,47 @@ export class Glasses {
         : await withTimeout(this.sdk.textContainerUpgrade(new TextContainerUpgrade({ containerID: BOX_ID, containerName: BOX_NAME, content: text })), 'text update');
       if (!ok) throw new Error('the glasses refused the update');
       this.shown = text;
-      if (rebuild) { this.needRebuild = false; this.shownPose = null; }
+      if (rebuild) { this.needRebuild = false; this.shownPose = null; this.gutterShown = [null, null]; this.clockShown = this.clockWanted; }
     } catch (e) {
       this.ev.onLog(`draw failed: ${msg(e)}`);
       this.shown = null; // next time rebuild the whole page
       this.lastWrite = performance.now() + 700; // back off a little
     } finally {
+      this.writing = false;
+      this.schedule();
+    }
+  }
+
+  /** One gutter image: the speaker marks for 4 rows. */
+  private async drawGutter(i: number): Promise<void> {
+    const key = this.gutterWanted[i];
+    this.writing = true;
+    this.lastWrite = performance.now();
+    try {
+      const marks = key.split(',').map(m => (m || null) as Mark);
+      const bytes = await png(gutter(marks), GUTTER_W, GUTTER_H);
+      const r = await withTimeout(this.sdk!.updateImageRawData(new ImageRawDataUpdate({ containerID: GUTTER_IDS[i], containerName: GUTTER_NAMES[i], imageData: bytes })), 'gutter');
+      if (r !== ImageRawDataUpdateResult.success) throw new Error(String(r));
+    } catch (e) {
+      this.ev.onLog(`gutter failed: ${msg(e)}`);
+    } finally {
+      this.gutterShown[i] = key; // don't retry in a loop; the next change tries again
+      this.writing = false;
+      this.schedule();
+    }
+  }
+
+  private async drawClock(): Promise<void> {
+    const text = this.clockWanted;
+    this.writing = true;
+    this.lastWrite = performance.now();
+    try {
+      const ok = await withTimeout(this.sdk!.textContainerUpgrade(new TextContainerUpgrade({ containerID: CLOCK_ID, containerName: CLOCK_NAME, content: text || ' ' })), 'clock');
+      if (!ok) throw new Error('refused');
+    } catch (e) {
+      this.ev.onLog(`clock failed: ${msg(e)}`);
+    } finally {
+      this.clockShown = text;
       this.writing = false;
       this.schedule();
     }
@@ -174,7 +253,7 @@ export class Glasses {
     this.lastWrite = performance.now();
     try {
       let bytes = this.poseBytes.get(pose);
-      if (!bytes) { bytes = await png(sprite(pose)); this.poseBytes.set(pose, bytes); }
+      if (!bytes) { bytes = await png(sprite(pose), W, H); this.poseBytes.set(pose, bytes); }
       const r = await withTimeout(this.sdk!.updateImageRawData(new ImageRawDataUpdate({ containerID: BUDDY_ID, containerName: BUDDY_NAME, imageData: bytes })), 'buddy');
       if (r !== ImageRawDataUpdateResult.success) throw new Error(String(r));
       this.shownPose = pose;
@@ -273,12 +352,12 @@ export class Glasses {
   }
 }
 
-/** Grey bytes (one per pixel, W x H) to PNG file bytes. */
-async function png(grey: Uint8Array): Promise<number[]> {
+/** Grey bytes (one per pixel, w x h) to PNG file bytes. */
+async function png(grey: Uint8Array, w: number, h: number): Promise<number[]> {
   const c = document.createElement('canvas');
-  c.width = W; c.height = H;
+  c.width = w; c.height = h;
   const g = c.getContext('2d')!;
-  const img = g.createImageData(W, H);
+  const img = g.createImageData(w, h);
   for (let i = 0; i < grey.length; i++) { const v = grey[i]; img.data.set([v, v, v, 255], i * 4); }
   g.putImageData(img, 0, 0);
   const blob = await new Promise<Blob>((ok, no) => c.toBlob(b => (b ? ok(b) : no(new Error('png failed'))), 'image/png'));

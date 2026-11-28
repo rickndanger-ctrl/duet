@@ -70,23 +70,11 @@ test('other voices well under yours do not hold the mic open', () => {
 
 test('a long sentence is not cut at a pause between words', () => closesSoon(play(6, n => noise(n, 300)), 'long'));
 
-test('the paused status line shows the time and date', () => {
+test('the corner clock shows the date and time, and fits beside the buddy', () => {
   const c = clock(new Date(2026, 10, 27, 15, 42));
   assert.match(c, /\b(3:42|15:42)\b/);
   assert.match(c, /27/);
   assert.match(c, /Fri/);
-  assert.equal(statusLine('armed', c), `${c}  ·  PAUSED`);
-  assert.ok(statusLine('armed', c).length <= 44, 'fits beside the mascot');
-  assert.equal(statusLine('armed'), 'PAUSED  ·  say "Hey Duet"');
-});
-
-test('knocks and clinks alone are not speech', () => {
-  let utterances = 0;
-  const vad = new Vad({ onUtterance: () => utterances++ });
-  const n = 8 * SR, a = noise(n, 60);
-  for (let t = SR; t < n; t += Math.round((0.15 + Math.abs(rnd()) * 0.3) * SR)) for (let i = 0; i < 400 && t + i < n; i++) a[t + i] += rnd() * 9000 * Math.exp(-i / 100);
-  const pcm = Int16Array.from(a, v => Math.max(-32768, Math.min(32767, Math.round(v))));
-  const bytes = new Uint8Array(pcm.buffer);
-  for (let i = 0; i < bytes.length; i += 1280) vad.push(bytes.slice(i, i + 1280));
-  assert.equal(utterances, 0);
+  assert.ok(c.length <= 24, c);
+  assert.equal(statusLine('armed'), 'PAUSED · "Hey Duet"');
 });

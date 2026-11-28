@@ -22,7 +22,7 @@ export interface VadOptions {
   sensitivity: number;
 }
 
-export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, minSpeechMs: 160, maxSpeechMs: 15_000, prerollMs: 300, sensitivity: 6 };
+export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, minSpeechMs: 160, maxSpeechMs: 30_000, prerollMs: 300, sensitivity: 6 };
 
 /** Frames of the room kept to find its quietest moment (2 s). */
 const ROOM_FRAMES = 100;

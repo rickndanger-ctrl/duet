@@ -49,9 +49,13 @@ G2 mic (16 kHz PCM, while Duet is open)
   → answer done: the mic is already open. Talk to continue; quiet for 20 s and it sleeps.  app/src/duet.ts
 ```
 
-- **Glance**: while Duet is paused the status line shows the time and date (`3:42 PM · Fri, Nov 27 · PAUSED`).
+- **Lens**: top row is a short status ("TALK NOW", "HEARING YOU…", "WAIT · thinking…"), the animated Claude buddy in
+  the middle, and the date and time on the right. Below, your whole message marked **ME** in the left margin, then
+  Claude's answer with a tiny Claude beside it. As soon as you start talking, a "ME …" line shows that Duet hears you.
 - **Wake**: say "Hey Duet" (works with the question in the same breath), or tap the temple / ring.
-- **Turn-taking**: the end of your sentence is the send button. Talking over an answer interrupts it.
+- **Turn-taking**: the end of your sentence (a second of silence) is the send button. Pause mid-thought and carry on
+  before Claude answers, and it stays one message. Talking over an answer interrupts it. Short replies like "Okay."
+  count when the mic clearly heard them.
 - **Confirm**: every write shows the exact draft and waits. Say "yes" / "send it" or tap to confirm.
   Say "no" or double tap to cancel. No answer in 60 s means cancel. "Okay" doesn't count as yes,
   because Whisper hears it in background noise.

@@ -24,3 +24,11 @@ test('the lens image fits the image container limits', () => {
   assert.ok(W >= 20 && W <= 288 && H >= 20 && H <= 144);
   assert.equal(sprite('ask').length, W * H);
 });
+
+test('the gutter draws ME and a tiny Claude only on their rows', async () => {
+  const { gutter, GUTTER_W, ROW_PX } = await import('../src/mascot.ts');
+  const g = gutter(['me', null, 'claude', null]);
+  const rowLit = (r: number) => { for (let y = r * ROW_PX; y < (r + 1) * ROW_PX; y++) for (let x = 0; x < GUTTER_W; x++) if (g[y * GUTTER_W + x]) return true; return false; };
+  assert.deepEqual([0, 1, 2, 3].map(rowLit), [true, false, true, false]);
+  assert.ok(gutter([null, null, null, null]).every(v => v === 0));
+});

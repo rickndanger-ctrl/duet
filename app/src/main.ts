@@ -81,7 +81,8 @@ const glasses = new Glasses({
 }, []);
 
 duet = new Duet({
-  show: (text, now) => glasses.show(text, now),
+  show: (text, now, marks) => glasses.show(text, now, marks),
+  clock: text => glasses.clock(text),
   mic: on => glasses.microphone(on),
   transcribe: (pcm, mode, signal) => api.transcribe(server, pcm, mode, signal),
   chat: (conversation, text, context, onEvent, signal) => api.chat(server, conversation, text, context, onEvent, signal),

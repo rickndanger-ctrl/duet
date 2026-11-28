@@ -123,6 +123,39 @@ export function animation(phase: Phase): { poses: Pose[]; ms: number } {
   }
 }
 
+// ---- the gutter beside the conversation ---------------------------------------------------------------
+/** Each gutter image covers 4 body rows (the lens allows images up to 144 px tall). */
+export const GUTTER_W = 38, GUTTER_ROWS = 4, ROW_PX = 27, GUTTER_H = GUTTER_ROWS * ROW_PX;
+/** Where a mark starts inside its row (the text's capitals start ~6 px into a row). */
+const MARK_Y = 4;
+
+// "ME" in a 5x7 pixel font.
+const ME = [
+  '10001.11111',
+  '11011.10000',
+  '10101.10000',
+  '10101.11110',
+  '10001.10000',
+  '10001.10000',
+  '10001.11111',
+];
+
+/** One gutter image: the marks for its 4 rows ('me' = ME, 'claude' = a tiny Claude, null = nothing). */
+export function gutter(marks: ('me' | 'claude' | null)[]): Uint8Array {
+  const g = new Uint8Array(GUTTER_W * GUTTER_H);
+  const rect = (x: number, y: number, w: number, h: number) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) if (x + i < GUTTER_W && y + j < GUTTER_H) g[(y + j) * GUTTER_W + x + i] = ON; };
+  marks.slice(0, GUTTER_ROWS).forEach((m, r) => {
+    const top = r * ROW_PX + MARK_Y;
+    if (m === 'claude') {
+      // The buddy at 2 x 4 px per block: 36 x 20.
+      [...BODY, LEGS_A].forEach((row, k) => [...row].forEach((c, i) => { if (c === '#') rect(1 + i * 2, top + k * 4, 2, 4); }));
+    } else if (m === 'me') {
+      ME.forEach((row, k) => [...row].forEach((c, i) => { if (c === '1') rect(5 + i * 2, top + 3 + k * 2, 2, 2); }));
+    }
+  });
+  return g;
+}
+
 /** Text art of a pose (every other row, since blocks are tall), for eyeballing the design in a terminal. */
 export function ascii(pose: Pose): string {
   const s = sprite(pose);

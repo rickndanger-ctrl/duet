@@ -15,7 +15,7 @@
 // Text messages: messages.mjs (macOS Messages through messages-helper.mjs; see docs/MESSAGES_SETUP.md).
 // Audio and conversation text are never written to disk or logs.
 import http from 'node:http'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -36,6 +36,16 @@ const GROQ_KEY = secret('GROQ_API_KEY', 'groq.key')
 const ANTHROPIC_KEY = secret('ANTHROPIC_API_KEY', 'anthropic.key')
 const MODEL = process.env.DUET_MODEL || 'claude-opus-5-5'
 const EFFORT = process.env.DUET_EFFORT || 'low'
+/** Debugging a session: while the file DUET_CONFIG/debug exists, transcripts are logged and each clip is saved to
+ *  DUET_CONFIG/debug-audio/ (delete both when done). Off by default: normally no speech or text is ever logged. */
+const debugOn = () => existsSync(path.join(CONFIG, 'debug'))
+function debugClip(pcm, mode, text, ms) {
+  const dir = path.join(CONFIG, 'debug-audio')
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const name = `${new Date().toISOString().replace(/[:.]/g, '-')}-${mode}.pcm`
+  writeFileSync(path.join(dir, name), pcm, { mode: 0o600 })
+  console.log(`debug ${mode} ${(pcm.length / 32000).toFixed(1)}s ${ms}ms "${text}" ${name}`)
+}
 /** DUET_FAKE=1: canned transcripts and answers, for the simulator and tests (no keys needed). */
 const FAKE = process.env.DUET_FAKE === '1'
 /** DUET_DEMO=1: real Claude and speech-to-text with a made-up calendar, inbox and texts (demo.mjs). */
@@ -170,7 +180,7 @@ async function runTool(use, ctx, event, signal) {
     const write = isText ? await prepareMessageWrite(messages, use.name, use.input) : await prepareWrite(google, use.name, use.input, ctx)
     const { ok, change } = await askWearer(event, write.verb, write.prompt, signal)
     console.log(`confirm ${use.name}: ${change ? 'change' : ok ? 'yes' : 'no'}`)
-    if (change) return result(`The wearer did not approve this draft and said: "${change}". Nothing was sent or changed. Make the change they asked for and call ${use.name} again right away (they will see the new draft and confirm again). Don't ask first.`)
+    if (change) return result(`The wearer did not approve this draft; instead they said: "${change}". Nothing was sent or changed. If that asks for a change to the draft, make it and call ${use.name} again right away (they will see the new draft and confirm again; don't ask first). If they were talking about something else, answer that and don't redraft.`)
     if (!ok) return result('The wearer said no (or did not answer). Nothing was sent or changed. Say so in a few words and ask if they want to change it.')
     event({ t: 'status', text: write.verb === 'Send' ? 'sending' : 'saving' })
     return result({ done: true, ...(await write.run()) })
@@ -254,6 +264,7 @@ const POLL_WAIT_MS = 20_000
 
 function startTurn(body) {
   const text = typeof body.text === 'string' ? body.text.trim() : ''
+  if (debugOn()) console.log(`debug chat "${text.slice(0, 200)}"`)
   const conv = conversation(body.conversation)
   const id = randomUUID()
   const turn = { events: [], done: false, waiters: new Set(), abort: new AbortController(), at: Date.now() }
@@ -342,6 +353,7 @@ export const server = http.createServer(async (req, res) => {
       const t0 = Date.now()
       const text = await transcribe(pcm, url.searchParams.get('mode') === 'wake' ? 'wake' : 'talk')
       console.log(`stt ${url.searchParams.get('mode') || 'talk'} ${(pcm.length / 32000).toFixed(1)}s audio in ${Date.now() - t0}ms`)
+      if (debugOn()) debugClip(pcm, url.searchParams.get('mode') || 'talk', text, Date.now() - t0)
       return send(res, 200, { text })
     }
     if (req.method === 'POST' && p === '/v1/confirm') {

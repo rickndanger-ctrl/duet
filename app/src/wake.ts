@@ -44,11 +44,19 @@ const PLAIN = /\b(?:no|nope|nah|don't|do not|send|it|that|this|cancel|stop|wait|
  */
 export function confirmReply(transcript: string): { ok: boolean; change?: string } | null {
   const ok = yesNo(transcript);
-  if (ok === null) return null;
+  // A whole sentence that is neither yes nor no ("so there were a lot of bugs...") is the wearer talking:
+  // don't sit on it until the draft times out. It goes to Claude, and nothing is sent.
+  if (ok === null) return isRealSpeech(transcript) && norm(transcript).split(' ').length >= 3 ? { ok: false, change: transcript.trim().slice(0, 300) } : null;
   const t = norm(transcript);
   const extra = t.replace(PLAIN, ' ').split(' ').filter(Boolean).length;
   const change = ok ? /\b(?:but|instead|actually|change|except|rather|make it|add|also)\b/.test(t) : extra >= 2;
   return change ? { ok: false, change: transcript.trim().slice(0, 300) } : { ok };
+}
+
+/** Short replies people really say after an answer ("Okay." "Thanks!" "Why?"). Whisper also invents some of these
+ *  from noise, so they count only when the microphone heard enough speech (see Duet). */
+export function isShortReply(transcript: string): boolean {
+  return /^(?:okay|ok|alright|all right|thanks|thank you|cool|great|perfect|nice|awesome|sure|yes|yeah|yep|no|nope|why|what|really|right|got it|sounds good)[.!?,\s]*$/i.test(transcript.trim());
 }
 
 /** "Pause", "stop listening", "that's all"...: the wearer wants Duet to stop listening for now. Short phrases only. */
