@@ -53,6 +53,8 @@ const MUSES = relays().filter(m => m?.url).map(m => ({ name: String(m.name || 'M
 
 /** A line typed after each question, so Muse writes for the lens. DUET_MUSE_NOTE='' turns it off. */
 const NOTE = process.env.DUET_MUSE_NOTE ?? '(Answer for my glasses: short, plain text.)'
+/** Spoken mode (the voice page for glasses without a display sends `spoken: true`): a different note, so the answer reads well aloud. */
+const SPOKEN_NOTE = process.env.DUET_MUSE_SPOKEN_NOTE ?? '(Answer to be spoken aloud: 1 to 3 short sentences, no lists, links, code or symbols.)'
 const POLL_REPLY_MS = Number(process.env.DUET_MUSE_POLL_MS || 700)
 /** /latest makes the relay read Muse's whole window (~0.7 s on the Mac): a little slower. */
 const POLL_LATEST_MS = Number(process.env.DUET_MUSE_LATEST_MS || 900)
@@ -68,10 +70,13 @@ const TURN_MAX_MS = Number(process.env.DUET_MUSE_TURN_MAX_MS || 10 * 60_000)
 const APP_DIR = process.env.DUET_APP_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'app', 'dist-muse')
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm' }
 
-async function serveApp(res, rel) {
+/** DUET_MUSE_WEB_DIR: static files of the voice page, served at /web/ without the token. Unset: no such route. */
+const WEB_DIR = process.env.DUET_MUSE_WEB_DIR ? path.resolve(home(process.env.DUET_MUSE_WEB_DIR)) : ''
+
+async function serveApp(res, rel, dir = APP_DIR) {
   try {
-    const file = path.resolve(APP_DIR, '.' + (rel === '/' || rel === '' ? '/index.html' : decodeURIComponent(rel)))
-    if (!file.startsWith(APP_DIR + path.sep) || !statSync(file).isFile()) throw new Error('missing')
+    const file = path.resolve(dir, '.' + (rel === '/' || rel === '' ? '/index.html' : decodeURIComponent(rel)))
+    if (!file.startsWith(dir + path.sep) || !statSync(file).isFile()) throw new Error('missing')
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' })
     res.end(await readFile(file))
   } catch { res.writeHead(404); res.end('Not found') }
@@ -192,8 +197,9 @@ const STATUS_OF_JOB = { queued: 'Muse is busy, queued', sending: 'typing to Muse
  * approval in its window). Muse's answer isn't streamed: its window text can change anywhere while it writes, and the
  * lens only takes text added at the end.
  */
-async function readAnswer(text, status, signal) {
-  const question = NOTE ? `${text.slice(0, 1500)} ${NOTE}` : text.slice(0, 1800)
+async function readAnswer(text, status, signal, spoken = false) {
+  const note = spoken ? SPOKEN_NOTE : NOTE
+  const question = note ? `${text.slice(0, 1500)} ${note}` : text.slice(0, 1800)
   let job = await askMuse(question, 0, signal)
   const started = Date.now()
   if (job.busy) status(STATUS_OF_JOB.queued)
@@ -241,7 +247,7 @@ async function readAnswer(text, status, signal) {
       continue
     }
     const seen = readMuse(reply)
-    if (seen.approval) status(`approve it on ${job.muse.name}`)
+    if (seen.approval) status(spoken ? `Muse needs your approval on ${job.muse.name}.` : `approve it on ${job.muse.name}`)
     else if (!seen.idle) status(seen.answer ? 'Muse is writing' : 'Muse is working')
     stable = seen.answer && last && seen.answer === last.answer && seen.idle === last.idle ? stable + 1 : 0
     last = seen
@@ -285,7 +291,7 @@ const unlessStopped = (promise, signal) => new Promise((resolve, reject) => {
  * same words plus more) sends only the added words, as a follow-up, and the lens shows Muse's answer to the first part
  * and then to the rest. A question's answer is read on even when the wearer's turn is cancelled, for this.
  */
-async function museTurn(text, conversation, event, signal) {
+async function museTurn(text, conversation, event, signal, spoken = false) {
   let lastStatus = ''
   const status = s => { if (!signal.aborted && s && s !== lastStatus) { lastStatus = s; event({ t: 'status', text: s }) } }
   // Reading an answer outlives the turn (see above), up to the usual limit.
@@ -297,16 +303,16 @@ async function museTurn(text, conversation, event, signal) {
     const first = await unlessStopped(prev.answer.then(a => ({ ok: true, a }), () => ({ ok: false })), signal)
     if (!first) return
     // The first part never got an answer (its send failed): ask the whole thing instead.
-    if (!first.ok) return museTurn(text, undefined, event, signal)
+    if (!first.ok) return museTurn(text, undefined, event, signal, spoken)
     if (first.a) event({ t: 'delta', text: first.a })
-    const rest = readAnswer(extra, status, reading())
+    const rest = readAnswer(extra, status, reading(), spoken)
     asked.set(conversation, { text, at: Date.now(), answer: rest.then(r => (first.a ? `${first.a}\n\n${r}` : r)) })
     console.log('muse: follow-up to the question before')
     const r = await unlessStopped(rest, signal)
     if (r !== undefined) event({ t: 'delta', text: (first.a ? '\n\n' : '') + r })
     return
   }
-  const answer = readAnswer(text, status, reading())
+  const answer = readAnswer(text, status, reading(), spoken)
   answer.catch(() => {}) // a cancelled turn's failure is nobody's business
   if (conversation) asked.set(conversation, { text, at: Date.now(), answer })
   for (const [k, v] of asked) if (Date.now() - v.at > ADD_ON_MS) asked.delete(k)
@@ -335,7 +341,7 @@ function startTurn(body) {
   void (async () => {
     const started = Date.now()
     try {
-      await museTurn(text, typeof body.conversation === 'string' && /^[\w-]{8,64}$/.test(body.conversation) ? body.conversation : '', event, turn.abort.signal)
+      await museTurn(text, typeof body.conversation === 'string' && /^[\w-]{8,64}$/.test(body.conversation) ? body.conversation : '', event, turn.abort.signal, body.spoken === true)
       console.log(`turn ok ${Date.now() - started}ms${turn.abort.signal.aborted ? ' (cancelled)' : ''}`)
       event({ t: 'done' })
     } catch (error) {
@@ -393,6 +399,10 @@ export const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && (p === '/app' || p.startsWith('/app/'))) {
     if (p === '/app') { res.writeHead(302, { Location: 'app/' }); return res.end() }
     return serveApp(res, p.slice(4))
+  }
+  if (WEB_DIR && req.method === 'GET' && (p === '/web' || p.startsWith('/web/'))) {
+    if (p === '/web') { res.writeHead(302, { Location: 'web/' }); return res.end() }
+    return serveApp(res, p.slice(4), WEB_DIR)
   }
   if (p === '/health') return send(res, 200, { ok: true, muse: MUSES.length > 0, muses: MUSES.map(m => m.name), stt: Boolean(GROQ_KEY || LOCAL_STT) || FAKE, localStt: Boolean(LOCAL_STT) })
   if (!TOKEN || req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' })

@@ -29,7 +29,7 @@ const CLAUDE: Brand = {
   devServer: 'http://127.0.0.1:5191', storageKey: 'duet', art: CLAUDE_ART, wake: HEY_DUET, ready: h => Boolean(h.claude), missing: 'no Claude key!',
 };
 
-const MUSE: Brand = {
+export const MUSE: Brand = {
   app: 'Hey Muse', assistant: 'Muse', tagline: 'Your Muse in your G2. Talk, read, talk back.',
   devServer: 'http://127.0.0.1:5192', storageKey: 'duetmuse', art: MUSE_GUY_ART, wake: HEY_MUSE,
   // Muse takes ~6-8 s to answer and a question typed into it can't be taken back: wait a bit longer before sending (you

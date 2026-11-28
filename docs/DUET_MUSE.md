@@ -53,6 +53,16 @@ DUET_MUSE_URL=https://your-server/duet-muse DUET_MUSE_TOKEN=$(cat ~/.config/duet
 
 The store icon is `app/icon-muse.png`, drawn by `scripts/muse-icon.mjs` (Even Hub wants 24x24, opaque #F4F4F4).
 
+## Voice page for glasses without a display
+
+For glasses with no lens (microphone and speaker only), `app/voice.html` is a page that listens for "Hey Muse", asks, and reads
+the answer aloud. It is built into `app/dist-muse` next to the app. Set `DUET_MUSE_WEB_DIR` to the folder holding it and the
+server serves it under `/web/` (also `/duet-muse/web/`), with no token: only the page's static files are public, the API
+still needs the token. Unset, there is no `/web/` route. The page sends `spoken: true` with `/v1/chat`; for that turn the
+server types `DUET_MUSE_SPOKEN_NOTE` (default: 1 to 3 short sentences, no lists, links, code or symbols) instead of
+`DUET_MUSE_NOTE`, and the approval status becomes a sentence to speak ("Muse needs your approval on <name>."). Follow-ups in the same conversation
+keep the spoken note.
+
 ## Rebranding
 
 Everything Muse-specific is in a few places: `MUSE` in `app/src/brand.ts` (name, tagline, wake word, buddy),

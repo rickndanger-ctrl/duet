@@ -3,6 +3,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { readMuse, sameQuestion } from './muse-reply.mjs'
 
 const HISTORY = ['Approvals history', 'Share a one-time code in Browser', 'The agent will see your one-time code.', 'Allowed once · 10h ago',
@@ -121,9 +124,9 @@ async function startMuseServer(relayUrl) {
   return `http://127.0.0.1:${server.address().port}`
 }
 
-async function turn(base, text) {
+async function turn(base, text, extra = {}) {
   const auth = { Authorization: 'Bearer app-token' }
-  const r = await fetch(`${base}/v1/chat`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation: 'test-conversation', text }) })
+  const r = await fetch(`${base}/v1/chat`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation: 'test-conversation', text, ...extra }) })
   assert.equal(r.status, 200)
   const { turn } = await r.json()
   const events = []
@@ -265,4 +268,92 @@ test('addedTo: only a true extension counts', async () => {
   assert.equal(addedTo('Give me my pie recipe?', 'Give me my pie recipe? And the pecan one.'), 'And the pecan one.')
   assert.equal(addedTo('Give me my pie recipe?', 'Something else entirely'), '')
   assert.equal(addedTo('Same', 'Same'), '')
+})
+
+test('spoken: true uses the spoken note and a speakable approval status; the default turn is unchanged', async () => {
+  const lines = (n, answer) => n < 4 ? ['Musa', 'is working', 'Approvals history', 'Allow access to calendar.google.com', 'The agent wants your calendar.', ...HISTORY.slice(1)]
+    : [answer, 'Musa', 'Connected', 'Approvals history', 'Allow access to calendar.google.com', 'The agent wants your calendar.', 'Allowed once · just now', ...HISTORY.slice(1)]
+  const relay = await fakeRelay({ script: (job, n) => lines(n, 'Two meetings.') })
+  const base = await startMuseServer(relay.url)
+  try {
+    const events = await turn(base, 'What is on my calendar?', { spoken: true })
+    assert.ok(events.some(e => e.t === 'status' && e.text === 'Muse needs your approval on My Mac.'))
+    assert.ok(!events.some(e => e.t === 'status' && e.text === 'approve it on My Mac'))
+    assert.equal(events.filter(e => e.t === 'delta').map(e => e.text).join(''), 'Two meetings.')
+    assert.match(relay.asked[0], /^What is on my calendar\? \(Answer to be spoken aloud: 1 to 3 short sentences/)
+    assert.doesNotMatch(relay.asked[0], /for my glasses/)
+    // Same server, no `spoken`: the usual note and status.
+    const plain = await turn(base, 'And on Friday?')
+    assert.match(relay.asked[1], /\(Answer for my glasses: short, plain text\.\)$/)
+    assert.ok(plain.some(e => e.t === 'status' && e.text === 'approve it on My Mac'))
+  } finally {
+    museServer.close(); relay.close()
+  }
+})
+
+test('spoken: a follow-up in the same conversation also uses the spoken note', async () => {
+  const relay = await fakeRelay({ script: (job, n) => n < 2 ? [] : [/pecan/i.test(job.question) ? 'Pecan.' : 'Custard.', 'Musa', 'Connected', ...HISTORY] })
+  const base = await startMuseServer(relay.url)
+  const auth = { Authorization: 'Bearer app-token', 'Content-Type': 'application/json' }
+  const chat = async text => (await (await fetch(`${base}/v1/chat`, { method: 'POST', headers: auth, body: JSON.stringify({ conversation: 'spoken-conversation', text, spoken: true }) })).json()).turn
+  try {
+    const first = await chat('Give me my pie recipe?')
+    await new Promise(r => setTimeout(r, 60))
+    await fetch(`${base}/v1/turn/${first}/cancel`, { method: 'POST', headers: auth })
+    const second = await chat('Give me my pie recipe? And the pecan one.')
+    const events = []
+    for (let after = 0; ;) {
+      const page = await (await fetch(`${base}/v1/turn/${second}?after=${after}`, { headers: auth })).json()
+      events.push(...page.events); after = page.next
+      if (page.done) break
+    }
+    assert.equal(relay.asked.length, 2)
+    assert.match(relay.asked[1], /^And the pecan one\. \(Answer to be spoken aloud/)
+    assert.equal(events.filter(e => e.t === 'delta').map(e => e.text).join(''), 'Custard.\n\nPecan.')
+  } finally {
+    museServer.close(); relay.close()
+  }
+})
+
+test('DUET_MUSE_WEB_DIR serves /web/ without a token, safely; unset means no route', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'muse-web-'))
+  mkdirSync(path.join(dir, 'web', 'assets'), { recursive: true })
+  const web = path.join(dir, 'web')
+  writeFileSync(path.join(web, 'voice.html'), '<h1>voice</h1>')
+  writeFileSync(path.join(web, 'assets', 'a.js'), 'export {}')
+  writeFileSync(path.join(web, 'assets', 'a.wasm'), Buffer.from([0, 97, 115, 109]))
+  writeFileSync(path.join(web, 'assets', 'a.css'), 'b{}')
+  writeFileSync(path.join(web, 'assets', 'a.svg'), '<svg/>')
+  writeFileSync(path.join(web, 'assets', 'a.json'), '{}')
+  writeFileSync(path.join(web, 'assets', 'a.png'), Buffer.from([137, 80]))
+  writeFileSync(path.join(dir, 'secret.txt'), 'nope')
+  const relay = await fakeRelay({ script: () => [] })
+  process.env.DUET_MUSE_WEB_DIR = web
+  let base = await startMuseServer(relay.url)
+  try {
+    const get = async p => fetch(base + p, { redirect: 'manual' })
+    const types = { 'voice.html': 'text/html', 'assets/a.js': 'text/javascript', 'assets/a.css': 'text/css', 'assets/a.wasm': 'application/wasm',
+      'assets/a.json': 'application/json', 'assets/a.png': 'image/png', 'assets/a.svg': 'image/svg+xml' }
+    for (const [f, type] of Object.entries(types)) {
+      const r = await get(`/web/${f}`)
+      assert.equal(r.status, 200, f)
+      assert.ok(r.headers.get('content-type').startsWith(type), f)
+    }
+    assert.equal(await (await get('/web/voice.html')).text(), '<h1>voice</h1>')
+    assert.equal((await get('/duet-muse/web/voice.html')).status, 200)
+    assert.equal((await get('/web/missing.html')).status, 404)
+    assert.equal((await get('/web/assets')).status, 404)
+    for (const bad of ['/web/..%2fsecret.txt', '/web/assets/..%2f..%2fsecret.txt', '/web/%00']) {
+      assert.equal((await get(bad)).status, 404, bad)
+    }
+    // The API still needs the token.
+    assert.equal((await fetch(`${base}/v1/chat`, { method: 'POST', body: '{}' })).status, 401)
+    museServer.close()
+    delete process.env.DUET_MUSE_WEB_DIR
+    base = await startMuseServer(relay.url + '/?off')
+    assert.equal((await get('/web/voice.html')).status, 401)
+  } finally {
+    delete process.env.DUET_MUSE_WEB_DIR
+    museServer.close(); relay.close()
+  }
 })

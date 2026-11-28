@@ -1,7 +1,8 @@
 // Client for the Duet server: speech-to-text and Claude's streamed answer.
 
 /** `brain`: who answers, for error messages (default Claude). */
-export interface ServerConfig { url: string; token: string; brain?: string }
+/** `spoken`: the answer will be read aloud (the voice-only page), so the server may shape it for the ear. */
+export interface ServerConfig { url: string; token: string; brain?: string; spoken?: boolean }
 export type ChatEvent =
   | { t: 'delta'; text: string }
   | { t: 'status'; text: string }
@@ -37,7 +38,7 @@ export async function chat(cfg: ServerConfig, conversation: string, text: string
   const res = await fetch(`${base(cfg)}/v1/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...auth(cfg) },
-    body: JSON.stringify({ conversation, text, context }),
+    body: JSON.stringify({ conversation, text, context, ...(cfg.spoken ? { spoken: true } : {}) }),
     signal,
   });
   if (res.status === 401) throw new Error('server token is wrong');

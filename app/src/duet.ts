@@ -195,6 +195,9 @@ export class Duet {
     void this.syncMic();
   }
 
+  /** Restart the wait for your reply (the voice page calls it when it has finished speaking an answer). */
+  rearmFollowUp(): void { if (this.phase === 'listening' || this.phase === 'your-turn') this.armFollowUp(); }
+
   private armFollowUp(): void {
     clearTimeout(this.followTimer);
     this.followTimer = setTimeout(() => {
