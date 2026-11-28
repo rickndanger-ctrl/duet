@@ -1,0 +1,12 @@
+next|Hey Duet, what's my next meeting?
+inbox|Anything from Sam in my inbox?
+late|Tell him I'll be ten minutes late.
+change|No, make it twenty minutes.
+yes_send|Yes, send it.
+texts|Any texts?
+maya|Tell Maya sure, I'll grab some on the way.
+yes|Yes.
+move|Push tomorrow's pie tasting to four.
+yes2|Yes.
+rain|Hey Duet, will it rain tomorrow?
+pause|Pause.

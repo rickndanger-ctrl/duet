@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import { loadGoogle } from './google.mjs'
 import { GOOGLE_TOOLS, READ_TOOLS, invalidInput, prepareWrite, runRead, fakeGoogle } from './tools.mjs'
+import { demoAccount } from './demo.mjs'
 import { MESSAGE_TOOLS, MESSAGE_READ_TOOLS, MESSAGE_STATUS, MESSAGES_SYSTEM, fakeMessages, invalidMessageInput, loadMessages, prepareMessageWrite, runMessageRead } from './messages.mjs'
 
 const CONFIG = process.env.DUET_CONFIG || path.join(os.homedir(), '.config', 'duet')
@@ -37,6 +38,8 @@ const MODEL = process.env.DUET_MODEL || 'claude-opus-5-5'
 const EFFORT = process.env.DUET_EFFORT || 'low'
 /** DUET_FAKE=1: canned transcripts and answers, for the simulator and tests (no keys needed). */
 const FAKE = process.env.DUET_FAKE === '1'
+/** DUET_DEMO=1: real Claude and speech-to-text with a made-up calendar, inbox and texts (demo.mjs). */
+const DEMO = process.env.DUET_DEMO === '1' ? demoAccount() : null
 
 /** The built glasses app, served at /app/ so the phone can load it straight from here (dev QR). */
 const APP_DIR = process.env.DUET_APP_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'app', 'dist')
@@ -52,9 +55,9 @@ async function serveApp(res, rel) {
 }
 
 const anthropic = ANTHROPIC_KEY ? new Anthropic({ apiKey: ANTHROPIC_KEY }) : null
-const google = FAKE ? fakeGoogle : loadGoogle(CONFIG)
+const google = FAKE ? fakeGoogle : DEMO ? DEMO.google : loadGoogle(CONFIG)
 /** Text messages (macOS Messages on this Mac), or null when not set up. */
-const messages = FAKE ? fakeMessages : loadMessages()
+const messages = FAKE ? fakeMessages : DEMO ? DEMO.messages : loadMessages()
 
 export const SYSTEM = `You are Duet, a voice assistant that lives in the wearer's Even Realities G2 smart glasses.
 The wearer speaks to you; their words reach you through speech-to-text, so expect small transcription errors and read for intent.
@@ -179,6 +182,7 @@ async function runTool(use, ctx, event, signal) {
 
 /** One wearer turn: Claude streams text, may use tools (writes wait for a yes on the lens), until it ends its turn. */
 async function runTurn(conv, text, ctx, event, signal) {
+  if (DEMO && !ctx.place) ctx = { ...ctx, place: DEMO.place }
   conv.messages.push({ role: 'user', content: text.slice(0, 4000) + contextLine(ctx) })
   let wrote = false
   // Text after a tool call starts on a new line; text blocks split only by web-search citations run on.
@@ -368,5 +372,5 @@ export const server = http.createServer(async (req, res) => {
 })
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)} google=${Boolean(google)} messages=${Boolean(messages)}${FAKE ? ' FAKE' : ''}`))
+  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)} google=${Boolean(google)} messages=${Boolean(messages)}${FAKE ? ' FAKE' : ''}${DEMO ? ' DEMO' : ''}`))
 }

@@ -94,6 +94,7 @@ duet = new Duet({
     drawLog();
   },
   onPhase: p => {
+    console.debug('[duet] phase', p); // for automated runs (the simulator's console API)
     animateBuddy(p);
     $('phase').textContent = PHASE_TEXT[p];
     $('phase').dataset.phase = p;

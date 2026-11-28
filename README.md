@@ -87,6 +87,11 @@ DUET_URL=https://your-server/duet DUET_TOKEN=$(cat ~/.config/duet/token) ../scri
 Try it without any keys: `DUET_FAKE=1 node duet-server.mjs` (scripted transcripts and answers, a fake
 calendar and inbox), then `npm run dev` in `app/` and `npx evenhub-simulator http://127.0.0.1:5190/`.
 
+With your own Anthropic and Groq keys but no Google or Messages: `DUET_DEMO=1 node duet-server.mjs` runs real Claude
+and speech-to-text against a made-up calendar, inbox and texts ([server/demo.mjs](server/demo.mjs)); sends and moves
+only change that demo data. The demo video was recorded this way: [demo/](demo/) drives the app in the simulator with
+spoken clips through a virtual mic and renders the video.
+
 The phone screen has the settings: "Hey Duet" on/off, mic sensitivity with a live level meter, how long
 Duet waits for your reply, and the server URL/token.
 

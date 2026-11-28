@@ -3,3 +3,13 @@ dist/
 *.ehpk
 .env*
 *.key
+demo/frames/
+demo/lines/
+demo/txt/
+demo/parts/
+demo/*.wav
+demo/*.mp4
+demo/*.png
+demo/timeline.json
+demo/frames.txt
+demo/parts.txt
