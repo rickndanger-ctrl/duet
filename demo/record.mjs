@@ -76,6 +76,10 @@ try {
   await play('maya'); await waitPhase(['confirm', 'your-turn', 'error']); await hold(2800)
   await play('yes'); await waitPhase(['your-turn', 'error']); await hold(2500)
 
+  scene('think')
+  await play('think'); await waitPhase(['confirm', 'your-turn', 'error']); await hold(3000)
+  await play('yes'); await waitPhase(['your-turn', 'error']); await hold(2500)
+
   scene('calendar')
   await play('move'); await waitPhase(['confirm', 'your-turn', 'error']); await hold(2800)
   await play('yes2'); await waitPhase(['your-turn', 'error']); await hold(2500)

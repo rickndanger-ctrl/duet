@@ -38,7 +38,8 @@ card('c_how', 11, [
     '2.  Your words go to speech-to-text (Whisper, about 0.4 s).',
     '3.  Claude (claude-opus-5-5) answers, with web search, Google Calendar, Gmail',
     '     and Messages (iMessage / SMS) as tools.',
-    '4.  The answer streams onto the lens, and the mic is already open for your reply.',
+    '4.  The answer streams onto the lens beside a tiny Claude (your words beside ME),',
+    '     and the mic is already open for your reply.',
     '',
     'Reads run at once. Every send, reply or calendar change shows the exact draft on the lens',
     'and waits for your spoken "yes" (or a tap). Say a change and Claude redrafts.',
@@ -69,22 +70,32 @@ writeFileSync(D + 'frames.txt', list.join('\n') + '\n')
 const total = S(END)
 
 const CAPTIONS = {
-  glance: 'Glance up: the time and date while Duet is paused',
-  ask: 'Say "Hey Duet" and ask. No phone, no buttons.',
+  glance: 'Glance up: the status, Claude in the middle, the time on the right',
+  ask: 'Say "Hey Duet" and ask. ME and the little Claude show who is talking.',
   follow: 'Just keep talking: the mic is already open for your reply',
   email: 'Nothing is sent until you say yes. Say a change and it redrafts.',
   texts: 'Your texts: hear what came in, reply by voice',
+  think: 'Pause to find your words: Duet waits (3.5 s, adjustable)',
   calendar: 'Move a meeting. Say "pause" when you\'re done.',
   noise: 'A fan running: Duet still hears when you stop talking',
 }
 const SAID = Object.fromEntries(readFileSync(D + 'lines.txt', 'utf8').trim().split('\n').map(l => l.split('|')))
 SAID.maya = "Text Maya back. Sure, I'll grab some on the way home."
+SAID.think = "Text Sam that the new onboarding mockups look really good to me, ... and that I'll bring the pie samples to the review."
 const draws = []
 tl.scenes.forEach((s, i) => {
   const a = S(s.start), b = i + 1 < tl.scenes.length ? S(tl.scenes[i + 1].start) : total
   draws.push(text(CAPTIONS[s.title] || s.title, { size: 46, y: 70, font: BOLD, from: Math.max(0, a), to: b - 0.05 }))
 })
 for (const c of tl.clips) {
+  if (c.name === 'think') {
+    // The pause scene: first half, the pause, second half.
+    const a = S(c.start), h = dur(D + 'lines/think_a.wav'), gap = 2.6
+    draws.push(text('You:  "Text Sam that the new onboarding mockups look really good to me,"', { size: 38, y: 948, color: '0xdfe8e1', from: a, to: a + h }))
+    draws.push(text('(a pause to find the words)', { size: 38, y: 948, color: '0x9fb3a4', from: a + h, to: a + h + gap }))
+    draws.push(text('You:  "...and that I\'ll bring the pie samples to the review."', { size: 38, y: 948, color: '0xdfe8e1', from: a + h + gap, to: a + dur(c.file) + 0.6 }))
+    continue
+  }
   const a = S(c.start), b = a + dur(c.file) + 0.6
   draws.push(text(`You:  "${SAID[c.name] || c.name}"`, { size: 38, y: 948, color: '0xdfe8e1', from: a, to: b }))
 }

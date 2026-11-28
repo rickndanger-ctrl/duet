@@ -3,6 +3,8 @@
 // The floor keeps learning the room while you talk (the quietest moment of the last 2 s is the room, not you),
 // so a fan, traffic or a TV can't hold the mic open. The end of speech is also judged against your own voice:
 // once you stop, background noise well under your level counts as quiet.
+// With a voice score (RNNoise, see denoise.ts), loud sounds that aren't a voice don't open the mic, and an utterance with
+// almost no voice in it is dropped instead of being sent to speech-to-text.
 
 export const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 320; // 20 ms
@@ -33,6 +35,11 @@ const ROOM_FRAMES = 100;
 const VOICE_FRAMES = 4;
 /** Once you're talking, sound this far under your voice is background (about -12 dB). */
 const UNDER_VOICE = 0.25;
+/** Voice score (0..1) a loud start needs somewhere in its last 200 ms to count as someone talking. */
+const START_VOICE = 0.5;
+const START_WINDOW = 10;
+/** An utterance needs at least this much clear voice (score >= START_VOICE) to be sent on. */
+const MIN_VOICE_MS = 100;
 
 export interface VadEvents {
   onSpeechStart?: () => void;
@@ -67,6 +74,10 @@ export class Vad {
   private preroll: Uint8Array[] = [];
   private utterance: Uint8Array[] = [];
   options: VadOptions;
+  /** How likely 20 ms of audio is a voice (0..1), or null to go by loudness alone. */
+  voiceScore: ((frame: Int16Array) => number) | null = null;
+  private recentVoice: number[] = [];
+  private voiceMs = 0;
 
   constructor(private readonly events: VadEvents, options: Partial<VadOptions> = {}) {
     this.options = { ...DEFAULT_VAD, ...options };
@@ -80,8 +91,8 @@ export class Vad {
 
   reset(): void {
     this.carry = new Uint8Array(0);
-    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0;
-    this.preroll = []; this.utterance = [];
+    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0; this.voiceMs = 0;
+    this.preroll = []; this.utterance = []; this.recentVoice = [];
   }
 
   /** The mic was just opened: forget the old room, learn the new one from the first frames. */
@@ -107,6 +118,9 @@ export class Vad {
 
   private frame(frame: Uint8Array): void {
     const level = rms(frame);
+    const p = this.voiceScore ? this.voiceScore(new Int16Array(frame.buffer, frame.byteOffset, frame.length >> 1)) : 1;
+    this.recentVoice.push(p);
+    if (this.recentVoice.length > START_WINDOW) this.recentVoice.shift();
     this.learnRoom(level);
     const on = Math.max(this.floor * this.factor(), this.minLevel());
     this.events.onLevel?.(Math.min(1, level / 6000), this.speaking);
@@ -115,11 +129,13 @@ export class Vad {
       const keep = Math.ceil(this.options.prerollMs / FRAME_MS);
       if (this.preroll.length > keep) this.preroll.shift();
       this.loudRun = level > on ? this.loudRun + 1 : 0;
-      if (this.loudRun >= VOICE_FRAMES) {
+      // Loud for long enough, and it sounds like a person (not a fan, a pan, music or a dog).
+      if (this.loudRun >= VOICE_FRAMES && Math.max(...this.recentVoice) >= START_VOICE) {
         this.speaking = true;
         this.utterance = [...this.preroll];
         this.preroll = [];
         this.speechMs = this.loudRun * FRAME_MS;
+        this.voiceMs = this.recentVoice.filter(v => v >= START_VOICE).length * FRAME_MS;
         this.quietMs = 0;
         this.voicedRun = this.loudRun;
         this.voice = level;
@@ -128,6 +144,7 @@ export class Vad {
       return;
     }
     this.utterance.push(frame);
+    if (p >= START_VOICE) this.voiceMs += FRAME_MS;
     const off = Math.max(on * 0.6, this.voice * UNDER_VOICE);
     this.voicedRun = level > off ? this.voicedRun + 1 : 0;
     // Your voice: rises with sustained loud sound (not a single knock), fades slowly, so background talk after you stop stays "under" it.
@@ -153,9 +170,11 @@ export class Vad {
 
   private finish(forced: boolean): void {
     const frames = this.utterance;
-    const speechMs = this.speechMs;
-    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0; this.utterance = []; this.preroll = [];
+    const speechMs = this.speechMs, voiceMs = this.voiceMs;
+    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0; this.voiceMs = 0; this.utterance = []; this.preroll = [];
     if (speechMs < this.options.minSpeechMs && !forced) { this.events.onDiscard?.(); return; }
+    // Hardly any voice in it (a bark, a laugh track, a clatter that got through): don't send it to speech-to-text.
+    if (this.voiceScore && voiceMs < MIN_VOICE_MS && !forced) { this.events.onDiscard?.(); return; }
     const out = new Uint8Array(frames.length * FRAME_BYTES);
     frames.forEach((f, i) => out.set(f, i * FRAME_BYTES));
     this.events.onUtterance?.(out, speechMs);

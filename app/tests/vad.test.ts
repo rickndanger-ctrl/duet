@@ -94,3 +94,18 @@ test('a pause to find the words mid-paragraph (up to 3.5 s) does not send it; a 
   assert.equal(run(5, 4.5), 2, 'a 4.5 s pause after a long talk sends it');
   assert.equal(run(1.5, 1.8), 2, 'a quick question is sent after 1 s of quiet');
 });
+
+test('with a voice score, loud sounds that are not a voice are not sent; a voice still is', () => {
+  const count = (score: number) => {
+    let n = 0;
+    const vad = new Vad({ onUtterance: () => n++ });
+    vad.voiceScore = () => score;
+    const sig = [...noise(SR, 40), ...sentence(2), ...noise(2 * SR, 40)];
+    const pcm = Int16Array.from(sig, v => Math.max(-32768, Math.min(32767, Math.round(v))));
+    const bytes = new Uint8Array(pcm.buffer);
+    for (let i = 0; i < bytes.length; i += 1280) vad.push(bytes.slice(i, i + 1280));
+    return n;
+  };
+  assert.equal(count(0.05), 0, 'a door, a dog: dropped before speech-to-text');
+  assert.equal(count(0.9), 1, 'a person: sent');
+});

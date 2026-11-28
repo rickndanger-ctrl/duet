@@ -10,3 +10,5 @@ move|Push tomorrow's pie tasting to four.
 yes2|Yes.
 rain|Hey Duet, will it rain tomorrow?
 pause|Pause.
+think_a|Text Sam that the new onboarding mockups look really good to me,
+think_b|and that I'll bring the pie samples to the review.

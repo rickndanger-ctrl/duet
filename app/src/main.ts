@@ -1,4 +1,5 @@
 // Duet: wiring between the glasses, the conversation loop, the server and the phone page.
+import { VoiceScore } from './denoise';
 import './style.css';
 import * as api from './api';
 import { Duet, DEFAULT_SETTINGS } from './duet';
@@ -165,6 +166,13 @@ $('test').addEventListener('click', async () => {
 // ---- start --------------------------------------------------------------------
 async function boot(): Promise<void> {
   const ok = await glasses.connect();
+  // RNNoise's voice score: loud sounds that aren't a person (a door, a dog, music) don't open the mic or go to
+  // speech-to-text. Loaded after the lens is up; without it Duet goes by loudness alone.
+  void VoiceScore.load().then(vs => {
+    if (!vs) return log('voice detector: loudness only');
+    duet.vad.voiceScore = f => vs.score(f);
+    log('voice detector: RNNoise');
+  });
   try {
     const saved = JSON.parse((await glasses.storage.get('duet.settings')) || '{}');
     for (const k of Object.keys(DEFAULT_SETTINGS) as (keyof typeof DEFAULT_SETTINGS)[]) if (saved[k] !== undefined) (duet.settings as unknown as Record<string, unknown>)[k] = saved[k];

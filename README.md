@@ -36,6 +36,8 @@ Anyone wearing G2 through a working day: small-business owners on the shop floor
 G2 mic (16 kHz PCM, while Duet is open)
   → voice activity detection in the app (energy, a noise floor that keeps learning   app/src/vad.ts
      the room while you talk, and your own voice level, so a fan or TV can't hold the mic open)
+  → RNNoise's voice score (Xiph RNNoise 0.2 in WebAssembly, on the phone): a door, a dog   app/src/denoise.ts
+     or music doesn't open the mic or get sent to speech-to-text
   → each spoken phrase → server /v1/stt → Groq Whisper (≈0.3 s)
        asleep: is it "Hey Duet …"?  (fuzzy match, the rest becomes the question)   app/src/wake.ts
        awake:  it's your turn → Claude
@@ -104,7 +106,8 @@ Duet waits for your reply, and the server URL/token.
 
 Everything in this repo was written from Nov 27, 2026 on, during the hackathon. Nothing here existed before Nov 23.
 It uses these existing libraries and APIs: Even Hub SDK (`@evenrealities/even_hub_sdk`), Anthropic SDK
-(`@anthropic-ai/sdk`), Groq's Whisper API, Google Calendar and Gmail REST APIs, Vite and TypeScript.
+(`@anthropic-ai/sdk`), Groq's Whisper API, Google Calendar and Gmail REST APIs, macOS Messages, RNNoise
+(Xiph, via Jitsi's WebAssembly build `@jitsi/rnnoise-wasm`, Apache-2.0), Vite and TypeScript.
 
 ## Safety and privacy
 
