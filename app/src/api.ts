@@ -71,12 +71,12 @@ export async function chat(cfg: ServerConfig, conversation: string, text: string
   }
 }
 
-/** The wearer's yes/no to a confirm event. */
-export async function confirm(cfg: ServerConfig, id: string, ok: boolean): Promise<void> {
+/** The wearer's yes/no to a confirm event; `change` is what they asked for instead ("no, say 20 minutes"). */
+export async function confirm(cfg: ServerConfig, id: string, ok: boolean, change?: string): Promise<void> {
   const res = await fetch(`${base(cfg)}/v1/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...auth(cfg) },
-    body: JSON.stringify({ id, ok }),
+    body: JSON.stringify({ id, ok, ...(change ? { change } : {}) }),
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`confirm failed (${res.status})`);

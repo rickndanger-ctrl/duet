@@ -2,9 +2,9 @@
 // the mic is already open for your reply → … → quiet for a while → back to sleep.
 // No buttons inside a conversation: the end of your speech is the send button.
 import type { ChatEvent } from './api';
-import { frame, statusLine, turnLines, wrap, type Phase, type Turn, BODY_LINES } from './screen';
+import { clock, frame, statusLine, turnLines, wrap, type Phase, type Turn, BODY_LINES } from './screen';
 import { Vad } from './vad';
-import { isPause, isRealSpeech, matchWake, yesNo } from './wake';
+import { confirmReply, isPause, isRealSpeech, matchWake, yesNo } from './wake';
 
 export interface DuetDeps {
   show: (text: string, now?: boolean) => void;
@@ -12,13 +12,15 @@ export interface DuetDeps {
   transcribe: (pcm: Uint8Array, mode: 'wake' | 'talk', signal: AbortSignal) => Promise<string>;
   chat: (conversation: string, text: string, context: Record<string, string>, onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>;
   /** The wearer's yes/no to an action Claude prepared (send an email, move a meeting). */
-  confirm: (id: string, ok: boolean) => Promise<void>;
+  confirm: (id: string, ok: boolean, change?: string) => Promise<void>;
   context: () => Record<string, string>;
   log: (line: string) => void;
   /** Phone page mirror: every turn as it changes. */
   onTurn?: (turn: Turn, phase: Phase) => void;
   onPhase?: (phase: Phase) => void;
   onLevel?: (level: number, speaking: boolean) => void;
+  /** The time (tests set it). */
+  now?: () => Date;
 }
 
 export interface DuetSettings {
@@ -32,6 +34,7 @@ export interface DuetSettings {
 
 export const DEFAULT_SETTINGS: DuetSettings = { wakeWord: true, sensitivity: 6, followUpMs: 20_000, memoryMs: 10 * 60_000 };
 const WAKE_MAX_SPEECH_MS = 6000;
+const LONG_HEARING_MS = 5000;
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
 const newId = () => (globalThis.crypto?.randomUUID?.() ?? `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
@@ -52,6 +55,10 @@ export class Duet {
   private sttAbort: AbortController | null = null;
   private followTimer: ReturnType<typeof setTimeout> | undefined;
   private errorTimer: ReturnType<typeof setTimeout> | undefined;
+  private clockTimer: ReturnType<typeof setInterval> | undefined;
+  private shownClock = '';
+  private micOn = false;
+  private longTimer: ReturnType<typeof setTimeout> | undefined;
   /** Bumped whenever what Duet is doing changes; late results from older work are dropped. */
   private gen = 0;
   private inFront = true;
@@ -69,7 +76,15 @@ export class Duet {
   }
 
   /** Start (or come back to the front). */
-  start(): void { this.sleep(); }
+  start(): void {
+    this.sleep();
+    // The clock on the paused status line: redraw when the minute changes.
+    clearInterval(this.clockTimer);
+    this.clockTimer = setInterval(() => { if (!this.awake && this.inFront && this.clockText() !== this.shownClock) this.render(); }, 10_000);
+    (this.clockTimer as { unref?: () => void }).unref?.(); // don't keep tests alive
+  }
+
+  private clockText(): string { return clock(this.d.now?.() ?? new Date()); }
 
   get awake(): boolean { return this.phase !== 'asleep' && this.phase !== 'armed'; }
 
@@ -151,6 +166,9 @@ export class Duet {
 
   private async syncMic(): Promise<void> {
     const want = this.inFront && (this.settings.wakeWord || this.awake);
+    // A mic that was off is in a new place (or the room changed): learn its noise from scratch.
+    if (want && !this.micOn) this.vad.restart();
+    this.micOn = want;
     await this.d.mic(want);
   }
 
@@ -160,6 +178,10 @@ export class Duet {
     if (this.phase === 'listening' || this.phase === 'your-turn') {
       clearTimeout(this.followTimer);
       this.setPhase('hearing');
+      // Still "hearing" after a while: probably noise, or a long thought. Say how to send it now.
+      const gen = this.gen;
+      clearTimeout(this.longTimer);
+      this.longTimer = setTimeout(() => { if (gen === this.gen && this.phase === 'hearing') this.setPhase('hearing', true, 'long'); }, LONG_HEARING_MS);
     }
   }
 
@@ -188,18 +210,21 @@ export class Duet {
       if (gen !== this.gen) return;
       if (text === null) return; // error already shown
       if (isPause(text)) { this.d.log('pause'); return this.sleep(); }
-      // Waiting for a follow-up, one word is usually a noise heard as a word (a door squeak became "screams").
+      // Waiting for a follow-up, one word is usually a noise heard as a word (a door squeak became "screams"),
+      // unless Claude just asked something ("Want me to change it?" "Sure.") or it's a yes / no.
       const followUp = this.turn !== null && !this.greeting;
-      if (!isRealSpeech(text) || (followUp && words(text) < 2)) { this.d.log(`ignored "${text.slice(0, 40)}"`); this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
+      const asked = /\?["')\s]*$/.test(this.turn?.duet ?? '');
+      const oneWordOk = !followUp || asked || yesNo(text) !== null;
+      if (!isRealSpeech(text) || (words(text) < 2 && !oneWordOk)) { this.d.log(`ignored "${text.slice(0, 40)}"`); this.setPhase(this.turn ? 'your-turn' : 'listening'); this.armFollowUp(); return; }
       return void this.ask(text);
     }
     // "Send it?" answered by voice.
     if (phase === 'confirm') {
       const text = await this.stt(pcm, 'talk', gen, true);
       if (gen !== this.gen || text === null || this.phase !== 'confirm') return;
-      const answer = yesNo(text);
-      this.d.log(`confirm heard: ${answer === null ? 'neither' : answer ? 'yes' : 'no'}`);
-      if (answer !== null) this.answerConfirm(answer, 'voice');
+      const reply = confirmReply(text);
+      this.d.log(`confirm heard: ${reply === null ? 'neither' : reply.change ? 'a change' : reply.ok ? 'yes' : 'no'}`);
+      if (reply) this.answerConfirm(reply.ok, 'voice', reply.change);
       return;
     }
     // Talking over an answer (barge-in): a real sentence replaces it.
@@ -299,13 +324,15 @@ export class Duet {
     void this.syncMic();
   }
 
-  private answerConfirm(ok: boolean, how: string): void {
+  /** `change`: the wearer said what to do differently; Claude redrafts and asks again. */
+  private answerConfirm(ok: boolean, how: string, change?: string): void {
     const req = this.confirmReq;
     if (!req) return;
     this.confirmReq = null;
-    this.d.log(`confirm ${ok ? 'yes' : 'no'} by ${how}`);
-    this.setPhase('working', true, ok ? (req.verb === 'Send' ? 'sending' : 'saving') : 'cancelled');
-    this.d.confirm(req.id, ok).catch(e => this.d.log(`confirm failed: ${(e as Error).message}`));
+    this.d.log(`confirm ${change ? 'change' : ok ? 'yes' : 'no'} by ${how}`);
+    if (change && this.turn) this.turn.you = change;
+    this.setPhase('working', true, change ? 'changing it' : ok ? (req.verb === 'Send' ? 'sending' : 'saving') : 'cancelled');
+    this.d.confirm(req.id, ok, change).catch(e => this.d.log(`confirm failed: ${(e as Error).message}`));
   }
 
   private fail(note: string): void {
@@ -343,13 +370,16 @@ export class Duet {
       : this.phase === 'asleep' ? 'Tap and ask me anything.\n\nTurn on "Hey Duet" in the menu to wake me by voice.'
         : "I'm listening. Go ahead.";
     const lines = turnLines(this.turn, placeholder);
-    // On your turn, say how to stop: Duet keeps listening otherwise.
-    if (this.phase === 'your-turn' || this.phase === 'listening') return [...lines, '', 'Say "pause" or double tap to stop listening.'];
+    // On your turn, say how to stop (Duet keeps listening otherwise), when it fits without pushing the answer off the top.
+    if ((this.phase === 'your-turn' || this.phase === 'listening') && lines.length + 2 <= BODY_LINES) return [...lines, '', 'Say "pause" or double tap to stop listening.'];
+    // Paused with an answer on screen: the status line shows the clock, so say how to wake here.
+    if (this.turn && !this.awake && lines.length + 2 <= BODY_LINES) return [...lines, '', this.phase === 'armed' ? 'Say "Hey Duet" or tap to talk.' : 'Tap to talk.'];
     return lines;
   }
 
   render(now = false): void {
-    const f = frame(statusLine(this.phase, this.note), this.lines(), this.scroll);
+    if (!this.awake) this.shownClock = this.clockText();
+    const f = frame(statusLine(this.phase, this.awake ? this.note : this.shownClock), this.lines(), this.scroll);
     if (this.scroll !== null) this.scroll = f.scroll;
     this.d.show(f.text, now);
     if (this.turn) this.d.onTurn?.(this.turn, this.phase);

@@ -90,7 +90,7 @@ const nameOf = addr => String(addr).replace(/\s*<[^>]*>\s*$/, '').replace(/"/g, 
  * `run` performs the action and returns the tool result.
  */
 export async function prepareWrite(google, name, input, ctx) {
-  const tz = ctx.tz
+  const tz = ctx?.tz
   if (name === 'gmail_reply') {
     const target = await google.replyTarget(input.message_id)
     return {

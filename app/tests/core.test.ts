@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Vad } from '../src/vad.ts';
-import { matchWake, isRealSpeech, yesNo, isPause } from '../src/wake.ts';
+import { matchWake, isRealSpeech, yesNo, isPause, confirmReply } from '../src/wake.ts';
 import { frame, statusLine, wrap, COLS, BODY_LINES, glassesSafe } from '../src/screen.ts';
 import { Duet } from '../src/duet.ts';
 import type { ChatEvent } from '../src/api.ts';
@@ -238,4 +238,12 @@ test('double tap says no; noise and "okay" do not answer', async () => {
 test('pause phrases stop listening; questions do not', () => {
   for (const t of ['Pause.', 'pause', 'Stop listening', "That's all.", 'Thanks Duet', 'Okay, pause', 'Hey Duet, pause']) assert.equal(isPause(t), true, t);
   for (const t of ['Pause the music in the kitchen please now', 'What time is it?', 'Stopwatch for five minutes', 'yes']) assert.equal(isPause(t), false, t);
+});
+
+test('a yes or no with a change in it redrafts instead of sending', () => {
+  for (const t of ['Yes.', 'Yeah, send it.', 'Sure, go ahead.', 'Yes please']) assert.deepEqual(confirmReply(t), { ok: true }, t);
+  for (const t of ['No.', 'No thanks.', "No, don't send it.", 'Nope, not now', 'Cancel it.']) assert.deepEqual(confirmReply(t), { ok: false }, t);
+  for (const t of ['No, say 20 minutes instead.', 'Yes, but make it Friday.', 'Wait, change the time to five.', 'No, send it to Sam instead'])
+    assert.deepEqual(confirmReply(t), { ok: false, change: t }, t);
+  assert.equal(confirmReply('what time is it'), null);
 });

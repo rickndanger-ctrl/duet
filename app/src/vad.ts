@@ -1,5 +1,8 @@
 // Voice activity detection on the glasses' 16 kHz s16le mono PCM.
 // Energy-based with an adaptive noise floor: cheap enough to run on every audio chunk the glasses send.
+// The floor keeps learning the room while you talk (the quietest moment of the last 2 s is the room, not you),
+// so a fan, traffic or a TV can't hold the mic open. The end of speech is also judged against your own voice:
+// once you stop, background noise well under your level counts as quiet.
 
 export const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 320; // 20 ms
@@ -19,7 +22,14 @@ export interface VadOptions {
   sensitivity: number;
 }
 
-export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, minSpeechMs: 300, maxSpeechMs: 30_000, prerollMs: 300, sensitivity: 6 };
+export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, minSpeechMs: 160, maxSpeechMs: 15_000, prerollMs: 300, sensitivity: 6 };
+
+/** Frames of the room kept to find its quietest moment (2 s). */
+const ROOM_FRAMES = 100;
+/** Sound must last this long to count as voice (a knock, clink or key press is shorter). */
+const VOICE_FRAMES = 4;
+/** Once you're talking, sound this far under your voice is background (about -12 dB). */
+const UNDER_VOICE = 0.25;
 
 export interface VadEvents {
   onSpeechStart?: () => void;
@@ -43,9 +53,12 @@ function rms(frame: Uint8Array): number {
 
 export class Vad {
   private carry = new Uint8Array(0);
-  private floor = 200;
+  private floor = 0;
+  private room: number[] = [];
+  private voice = 0;
   private speaking = false;
   private loudRun = 0;
+  private voicedRun = 0;
   private quietMs = 0;
   private speechMs = 0;
   private preroll: Uint8Array[] = [];
@@ -58,15 +71,21 @@ export class Vad {
 
   get isSpeaking(): boolean { return this.speaking; }
 
-  /** Speech must be this many times the noise floor (sensitivity 10 → 1.6x, 1 → 6x). */
-  private factor(): number { return 6.5 - 0.49 * Math.min(10, Math.max(1, this.options.sensitivity)); }
+  /** Speech must be this many times the noise floor (sensitivity 10 → 1.3x, 6 → 3x, 1 → 5x). */
+  private factor(): number { return 5.5 - 0.42 * Math.min(10, Math.max(1, this.options.sensitivity)); }
   private minLevel(): number { return 60 + (10 - this.options.sensitivity) * 60; }
 
   reset(): void {
     this.carry = new Uint8Array(0);
-    this.speaking = false; this.loudRun = 0; this.quietMs = 0; this.speechMs = 0;
+    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0;
     this.preroll = []; this.utterance = [];
   }
+
+  /** The mic was just opened: forget the old room, learn the new one from the first frames. */
+  restart(): void { this.reset(); this.floor = 0; this.room = []; }
+
+  /** The current noise floor (for logs and tests). */
+  get noiseFloor(): number { return this.floor; }
 
   /** Ends the current utterance now (a tap means "I'm done"). Returns whether one was sent. */
   flush(): boolean {
@@ -85,36 +104,52 @@ export class Vad {
 
   private frame(frame: Uint8Array): void {
     const level = rms(frame);
+    this.learnRoom(level);
     const on = Math.max(this.floor * this.factor(), this.minLevel());
-    const off = on * 0.6;
     this.events.onLevel?.(Math.min(1, level / 6000), this.speaking);
     if (!this.speaking) {
-      // The floor follows the room when nobody is talking: down fast, up slowly.
-      this.floor = level < this.floor ? this.floor * 0.9 + level * 0.1 : this.floor * 0.995 + level * 0.005;
-      this.floor = Math.max(20, this.floor);
       this.preroll.push(frame);
       const keep = Math.ceil(this.options.prerollMs / FRAME_MS);
       if (this.preroll.length > keep) this.preroll.shift();
       this.loudRun = level > on ? this.loudRun + 1 : 0;
-      if (this.loudRun >= 3) {
+      if (this.loudRun >= VOICE_FRAMES) {
         this.speaking = true;
         this.utterance = [...this.preroll];
         this.preroll = [];
         this.speechMs = this.loudRun * FRAME_MS;
         this.quietMs = 0;
+        this.voicedRun = this.loudRun;
+        this.voice = level;
         this.events.onSpeechStart?.();
       }
       return;
     }
     this.utterance.push(frame);
-    if (level > off) { this.quietMs = 0; this.speechMs += FRAME_MS; } else this.quietMs += FRAME_MS;
+    const off = Math.max(on * 0.6, this.voice * UNDER_VOICE);
+    this.voicedRun = level > off ? this.voicedRun + 1 : 0;
+    // Your voice: rises with sustained loud sound (not a single knock), fades slowly, so background talk after you stop stays "under" it.
+    if (this.voicedRun >= VOICE_FRAMES && level > this.voice) this.voice = this.voice * 0.7 + level * 0.3;
+    else this.voice *= 0.997;
+    if (this.voicedRun > 0) this.speechMs += FRAME_MS;
+    if (this.voicedRun >= VOICE_FRAMES) this.quietMs = 0; else this.quietMs += FRAME_MS;
     if (this.quietMs >= this.options.endSilenceMs || this.speechMs + this.quietMs >= this.options.maxSpeechMs) this.finish(false);
+  }
+
+  /** Noise floor: follows the room down fast and up slowly, and never sits under the quietest frame of the last 2 s. */
+  private learnRoom(level: number): void {
+    this.room.push(level);
+    if (this.room.length > ROOM_FRAMES) this.room.shift();
+    if (this.floor === 0) { this.floor = Math.max(20, level); return; }
+    if (this.room.length <= 5) { this.floor = Math.max(20, Math.min(...this.room)); return; } // just opened: the first 100 ms is the room
+    if (!this.speaking) this.floor = level < this.floor ? this.floor * 0.9 + level * 0.1 : this.floor * 0.98 + level * 0.02;
+    if (this.room.length >= ROOM_FRAMES / 2) this.floor = Math.max(this.floor, Math.min(...this.room));
+    this.floor = Math.max(20, this.floor);
   }
 
   private finish(forced: boolean): void {
     const frames = this.utterance;
     const speechMs = this.speechMs;
-    this.speaking = false; this.loudRun = 0; this.quietMs = 0; this.speechMs = 0; this.utterance = []; this.preroll = [];
+    this.speaking = false; this.loudRun = 0; this.voicedRun = 0; this.quietMs = 0; this.speechMs = 0; this.voice = 0; this.utterance = []; this.preroll = [];
     if (speechMs < this.options.minSpeechMs && !forced) { this.events.onDiscard?.(); return; }
     const out = new Uint8Array(frames.length * FRAME_BYTES);
     frames.forEach((f, i) => out.set(f, i * FRAME_BYTES));

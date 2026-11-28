@@ -1,10 +1,10 @@
 # Duet: talk with Claude through your Even G2
 
-**Track 04 · AI Assistants & Work** (Claude + Google Calendar + Gmail)
+**Track 04 · AI Assistants & Work** (Claude + Google Calendar + Gmail + text messages)
 
 Duet is a hands-free conversation with Claude on Even Realities G2 glasses. You speak, Claude's answer
 appears on the lens, and you **just talk back**: no button between turns. It can also act on your day.
-It reads your calendar and mail, drafts replies and moves meetings. Nothing is sent or changed until
+It reads your calendar, mail and texts, drafts replies, sends texts and moves meetings. Nothing is sent or changed until
 you say **"yes"** to the exact draft on the lens.
 
 ```
@@ -34,18 +34,22 @@ Anyone wearing G2 through a working day: small-business owners on the shop floor
 
 ```
 G2 mic (16 kHz PCM, while Duet is open)
-  → voice activity detection in the app (energy + adaptive noise floor)   app/src/vad.ts
+  → voice activity detection in the app (energy, a noise floor that keeps learning   app/src/vad.ts
+     the room while you talk, and your own voice level, so a fan or TV can't hold the mic open)
   → each spoken phrase → server /v1/stt → Groq Whisper (≈0.3 s)
        asleep: is it "Hey Duet …"?  (fuzzy match, the rest becomes the question)   app/src/wake.ts
        awake:  it's your turn → Claude
   → server runs the turn with Claude (claude-opus-5-5, low effort) + tools:          server/duet-server.mjs
        web search · calendar_events · gmail_search · gmail_read                       (run at once)
+       messages_recent · messages_thread                                              (run at once)
        gmail_reply · gmail_send · calendar_create_event · calendar_update_event        (wait for your yes)
+       messages_send                                                                  (waits for your yes)
   → app long-polls the turn: status ("checking your calendar…"), text, confirm requests
   → word-wrapped onto the 576×288 lens (8 lines, swipe to scroll)                     app/src/screen.ts
   → answer done: the mic is already open. Talk to continue; quiet for 20 s and it sleeps.  app/src/duet.ts
 ```
 
+- **Glance**: while Duet is paused the status line shows the time and date (`3:42 PM · Fri, Nov 27 · PAUSED`).
 - **Wake**: say "Hey Duet" (works with the question in the same breath), or tap the temple / ring.
 - **Turn-taking**: the end of your sentence is the send button. Talking over an answer interrupts it.
 - **Confirm**: every write shows the exact draft and waits. Say "yes" / "send it" or tap to confirm.
@@ -58,6 +62,7 @@ G2 mic (16 kHz PCM, while Duet is open)
 
 Needs Node 20+, an [Anthropic API key](https://console.anthropic.com), a [Groq API key](https://console.groq.com)
 (speech-to-text) and, for calendar and mail, a Google OAuth client ([docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md)).
+For text messages, run the server on a Mac signed in to Messages ([docs/MESSAGES_SETUP.md](docs/MESSAGES_SETUP.md)).
 
 ```bash
 # 1. Server (any machine your phone can reach over HTTPS)

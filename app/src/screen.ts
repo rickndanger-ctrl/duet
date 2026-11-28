@@ -10,13 +10,13 @@ const RULE = 21;
 
 export type Phase = 'asleep' | 'armed' | 'listening' | 'hearing' | 'transcribing' | 'thinking' | 'working' | 'answering' | 'your-turn' | 'confirm' | 'error';
 
-/** Whether the wearer should talk now or wait: the status line says it in plain words. */
+/** Whether the wearer should talk now or wait: the status line says it in plain words. Paused, `note` is the clock. */
 export function statusLine(phase: Phase, note = ''): string {
   const label: Record<Phase, string> = {
-    asleep: 'PAUSED  ·  tap to talk',
-    armed: 'PAUSED  ·  say "Hey Duet"',
+    asleep: note ? `${note}  ·  PAUSED` : 'PAUSED  ·  tap to talk',
+    armed: note ? `${note}  ·  PAUSED` : 'PAUSED  ·  say "Hey Duet"',
     listening: 'TALK NOW  ·  listening',
-    hearing: 'TALK NOW  ·  hearing you…',
+    hearing: note ? 'TALK NOW  ·  hearing you…  tap to send' : 'TALK NOW  ·  hearing you…',
     transcribing: 'WAIT  ·  got it…',
     thinking: 'WAIT  ·  thinking…',
     working: `WAIT  ·  ${note || 'working'}…`,
@@ -26,6 +26,13 @@ export function statusLine(phase: Phase, note = ''): string {
     error: '! ' + (note || 'something went wrong'),
   };
   return label[phase];
+}
+
+/** The clock for the status line while paused: "3:42 PM · Fri, Nov 27" (the phone's 12/24 h style). */
+export function clock(d: Date): string {
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const date = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  return `${time}  ·  ${date}`.replace(/[\u202F\u00A0]/g, ' ');
 }
 
 /** Word wrap to `cols`; long words are split. Keeps blank lines (paragraphs). */

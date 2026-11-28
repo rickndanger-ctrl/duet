@@ -34,6 +34,23 @@ export function yesNo(transcript: string): boolean | null {
   return null;
 }
 
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+/** Words that only say yes or no (or "don't send it"); anything else after a "no" is a change. */
+const PLAIN = /\b(?:no|nope|nah|don't|do not|send|it|that|this|cancel|stop|wait|hold on|never ?mind|forget it|not yet|not now|thanks|thank you|please|yes|yeah|yep|sure|okay|ok|go|ahead)\b/g;
+
+/**
+ * The wearer's answer to "Send? yes / no". A change ("no, say 20 minutes instead", "yes, but make it Friday")
+ * comes back as ok=false with the words, so Claude can redraft instead of sending the wrong thing. null = neither.
+ */
+export function confirmReply(transcript: string): { ok: boolean; change?: string } | null {
+  const ok = yesNo(transcript);
+  if (ok === null) return null;
+  const t = norm(transcript);
+  const extra = t.replace(PLAIN, ' ').split(' ').filter(Boolean).length;
+  const change = ok ? /\b(?:but|instead|actually|change|except|rather|make it|add|also)\b/.test(t) : extra >= 2;
+  return change ? { ok: false, change: transcript.trim().slice(0, 300) } : { ok };
+}
+
 /** "Pause", "stop listening", "that's all"...: the wearer wants Duet to stop listening for now. Short phrases only. */
 export function isPause(transcript: string): boolean {
   const t = transcript.toLowerCase().replace(/[^a-z' ]/g, ' ').replace(/\s+/g, ' ').trim();

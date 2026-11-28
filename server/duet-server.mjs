@@ -6,11 +6,13 @@
 //   GET  /v1/turn/:id?after=n   long-poll (up to 20 s) -> {events, next, done}
 //        events: {"t":"delta","text"} {"t":"status","text"} {"t":"confirm","id","verb","prompt"} {"t":"done"} {"t":"error","message"}
 //   POST /v1/turn/:id/cancel    the wearer talked over the answer or left
-//   POST /v1/confirm  body: {id, ok}   the wearer's yes/no to a "confirm" event (send an email, move a meeting...)
+//   POST /v1/confirm  body: {id, ok, change?}   the wearer's yes/no to a "confirm" event (send an email, move a meeting...);
+//                     change = what they asked for instead ("no, say 20 minutes"), so Claude redrafts
 //   GET  /health   -> {ok:true}
 //
 // Keys come from the environment or files in DUET_CONFIG (default ~/.config/duet):
 //   ANTHROPIC_API_KEY | anthropic.key,  GROQ_API_KEY | groq.key,  DUET_TOKEN | token
+// Text messages: messages.mjs (macOS Messages through messages-helper.mjs; see docs/MESSAGES_SETUP.md).
 // Audio and conversation text are never written to disk or logs.
 import http from 'node:http'
 import { readFileSync, statSync } from 'node:fs'
@@ -22,6 +24,7 @@ import { randomUUID } from 'node:crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import { loadGoogle } from './google.mjs'
 import { GOOGLE_TOOLS, READ_TOOLS, invalidInput, prepareWrite, runRead, fakeGoogle } from './tools.mjs'
+import { MESSAGE_TOOLS, MESSAGE_READ_TOOLS, MESSAGE_STATUS, MESSAGES_SYSTEM, fakeMessages, invalidMessageInput, loadMessages, prepareMessageWrite, runMessageRead } from './messages.mjs'
 
 const CONFIG = process.env.DUET_CONFIG || path.join(os.homedir(), '.config', 'duet')
 const secret = (env, file) => process.env[env] || (() => { try { return readFileSync(path.join(CONFIG, file), 'utf8').trim() } catch { return '' } })()
@@ -50,6 +53,8 @@ async function serveApp(res, rel) {
 
 const anthropic = ANTHROPIC_KEY ? new Anthropic({ apiKey: ANTHROPIC_KEY }) : null
 const google = FAKE ? fakeGoogle : loadGoogle(CONFIG)
+/** Text messages (macOS Messages on this Mac), or null when not set up. */
+const messages = FAKE ? fakeMessages : loadMessages()
 
 export const SYSTEM = `You are Duet, a voice assistant that lives in the wearer's Even Realities G2 smart glasses.
 The wearer speaks to you; their words reach you through speech-to-text, so expect small transcription errors and read for intent.
@@ -59,6 +64,7 @@ How to answer:
 - Lead with the answer itself. Usually 1-2 short sentences, under 35 words: it's read at a glance. Go longer only when asked for steps, a list or detail; then use short lines.
 - Plain text only: no markdown, no headings, no bullets with asterisks, no emoji, no tables. For lists use "1." style lines or "- ".
 - This is a spoken back-and-forth: the wearer will simply answer you by voice. Ask a short follow-up question only when it truly helps.
+- When you use a tool, call it with no text before it: the lens already shows what you're doing, and any words before a tool call show up as clutter.
 - Use web search for anything current (news, weather, scores, prices, opening hours, recent facts). The wearer is waiting: one well-aimed search is almost always enough. Don't announce that you are searching.
 - If you're unsure what was said, say what you heard and ask.
 - Each message ends with the wearer's current time, time zone and rough location in parentheses. Use them; don't repeat them back.`
@@ -124,15 +130,15 @@ function conversation(id) {
   return c
 }
 
-/** Confirmations waiting for the wearer: id -> resolve(boolean). */
+/** Confirmations waiting for the wearer: id -> resolve({ ok, change }). */
 const pending = new Map()
 function askWearer(event, verb, prompt, signal) {
   const id = randomUUID()
   event({ t: 'confirm', id, verb, prompt })
   return new Promise(resolve => {
-    const done = ok => { if (!pending.has(id)) return; pending.delete(id); clearTimeout(timer); resolve(ok) }
-    const timer = setTimeout(() => done(false), 60_000)
-    signal.addEventListener('abort', () => done(false), { once: true })
+    const done = answer => { if (!pending.has(id)) return; pending.delete(id); clearTimeout(timer); resolve(answer) }
+    const timer = setTimeout(() => done({ ok: false }), 60_000)
+    signal.addEventListener('abort', () => done({ ok: false }), { once: true })
     pending.set(id, done)
   })
 }
@@ -150,14 +156,18 @@ const STATUS = { calendar_events: 'checking your calendar', gmail_search: 'check
 
 async function runTool(use, ctx, event, signal) {
   const result = (content, isError = false) => ({ type: 'tool_result', tool_use_id: use.id, content: typeof content === 'string' ? content : JSON.stringify(content), ...(isError ? { is_error: true } : {}) })
-  const bad = invalidInput(use.name, use.input)
+  const isText = use.name.startsWith('messages_')
+  const bad = isText ? invalidMessageInput(use.name, use.input) : invalidInput(use.name, use.input)
   if (bad) return result(`Invalid input: ${bad}`, true)
-  event({ t: 'status', text: STATUS[use.name] || 'working' })
+  event({ t: 'status', text: STATUS[use.name] || MESSAGE_STATUS[use.name] || 'working' })
   try {
+    if (isText && !messages) return result('Text messages are not set up on this server.', true)
+    if (MESSAGE_READ_TOOLS.has(use.name)) return result(await runMessageRead(messages, use.name, use.input))
     if (READ_TOOLS.has(use.name)) return result(await runRead(google, use.name, use.input))
-    const write = await prepareWrite(google, use.name, use.input, ctx)
-    const ok = await askWearer(event, write.verb, write.prompt, signal)
-    console.log(`confirm ${use.name}: ${ok ? 'yes' : 'no'}`)
+    const write = isText ? await prepareMessageWrite(messages, use.name, use.input) : await prepareWrite(google, use.name, use.input, ctx)
+    const { ok, change } = await askWearer(event, write.verb, write.prompt, signal)
+    console.log(`confirm ${use.name}: ${change ? 'change' : ok ? 'yes' : 'no'}`)
+    if (change) return result(`The wearer did not approve this draft and said: "${change}". Nothing was sent or changed. Make the change they asked for and call ${use.name} again right away (they will see the new draft and confirm again). Don't ask first.`)
     if (!ok) return result('The wearer said no (or did not answer). Nothing was sent or changed. Say so in a few words and ask if they want to change it.')
     event({ t: 'status', text: write.verb === 'Send' ? 'sending' : 'saving' })
     return result({ done: true, ...(await write.run()) })
@@ -171,7 +181,10 @@ async function runTool(use, ctx, event, signal) {
 async function runTurn(conv, text, ctx, event, signal) {
   conv.messages.push({ role: 'user', content: text.slice(0, 4000) + contextLine(ctx) })
   let wrote = false
-  const tools = google ? [WEB_SEARCH, ...GOOGLE_TOOLS] : [WEB_SEARCH]
+  // Text after a tool call starts on a new line; text blocks split only by web-search citations run on.
+  let lastBlock = ''
+  const tools = [WEB_SEARCH, ...(google ? GOOGLE_TOOLS : []), ...(messages ? MESSAGE_TOOLS : [])]
+  const system = SYSTEM + (google ? GOOGLE_SYSTEM : '') + (messages ? MESSAGES_SYSTEM : '')
   try {
     for (let step = 0; step < 10; step++) {
       const stream = anthropic.beta.messages.stream({
@@ -180,14 +193,16 @@ async function runTurn(conv, text, ctx, event, signal) {
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
         output_config: { effort: EFFORT },
-        system: [{ type: 'text', text: google ? SYSTEM + GOOGLE_SYSTEM : SYSTEM, cache_control: { type: 'ephemeral' } }],
+        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
         tools,
         messages: conv.messages,
       }, { signal })
       stream.on('streamEvent', ev => {
         if (ev.type !== 'content_block_start') return
-        if (ev.content_block?.type === 'server_tool_use') event({ t: 'status', text: 'searching the web' })
-        if (ev.content_block?.type === 'text') { if (wrote) event({ t: 'delta', text: '\n' }) }
+        const type = ev.content_block?.type
+        if (type === 'server_tool_use') event({ t: 'status', text: 'searching the web' })
+        if (type === 'text' && wrote && lastBlock && lastBlock !== 'text' && lastBlock !== 'web_search_tool_result') event({ t: 'delta', text: '\n' })
+        lastBlock = type
       })
       stream.on('text', t => { if (!t) return; wrote = true; event({ t: 'delta', text: t }) })
       const msg = await stream.finalMessage()
@@ -216,7 +231,7 @@ async function fakeTurn(conv, text, ctx, event, signal) {
   if (/email|reply|sam|lunch/i.test(text)) {
     event({ t: 'status', text: 'checking your mail' })
     await new Promise(r => setTimeout(r, 400))
-    const ok = await askWearer(event, 'Send', 'Reply to Sam Lee\nRe: Lunch Friday?\n"Yes! See you at noon."', signal)
+    const { ok } = await askWearer(event, 'Send', 'Reply to Sam Lee\nRe: Lunch Friday?\n"Yes! See you at noon."', signal)
     await say(ok ? 'Sent. Sam knows you\'ll be there at noon.' : 'Okay, I didn\'t send it. Want to change the reply?')
   } else if (/octopus/i.test(text)) {
     await say('Here are five octopus facts:\n1. Three hearts: two for the gills, one for the body.\n2. Blue blood, thanks to copper-based hemocyanin.\n3. Two thirds of their neurons live in their arms.\n4. They can change color and skin texture in a fraction of a second.\n5. Most species live only one to two years.\nWant one about squid next?')
@@ -254,7 +269,7 @@ function startTurn(body) {
     await previous
     const started = Date.now()
     try {
-      await (FAKE ? fakeTurn : runTurn)(conv, text, body.context, event, turn.abort.signal)
+      await (FAKE ? fakeTurn : runTurn)(conv, text, body.context && typeof body.context === "object" ? body.context : {}, event, turn.abort.signal)
       console.log(`turn ok msgs=${conv.messages.length} ${Date.now() - started}ms${turn.abort.signal.aborted ? ' (cancelled)' : ''}`)
       event({ t: 'done' })
     } catch (error) {
@@ -314,7 +329,7 @@ export const server = http.createServer(async (req, res) => {
     if (p === '/app') { res.writeHead(302, { Location: 'app/' }); return res.end() }
     return serveApp(res, p.slice(4))
   }
-  if (p === '/health') return send(res, 200, { ok: true, claude: Boolean(anthropic) || FAKE, stt: Boolean(GROQ_KEY) || FAKE, model: MODEL, google: Boolean(google) })
+  if (p === '/health') return send(res, 200, { ok: true, claude: Boolean(anthropic) || FAKE, stt: Boolean(GROQ_KEY) || FAKE, model: MODEL, google: Boolean(google), messages: Boolean(messages) })
   if (!FAKE && (!TOKEN || req.headers.authorization !== `Bearer ${TOKEN}`)) return send(res, 401, { error: 'unauthorized' })
   try {
     if (req.method === 'POST' && p === '/v1/stt') {
@@ -329,7 +344,7 @@ export const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await readBody(req, 4096)).toString('utf8') || '{}')
       const done = pending.get(String(body.id))
       if (!done) return send(res, 404, { error: 'nothing waiting' })
-      done(body.ok === true)
+      done({ ok: body.ok === true, change: typeof body.change === 'string' && body.change.trim() ? body.change.trim().slice(0, 300) : undefined })
       return send(res, 200, { ok: true })
     }
     if (req.method === 'POST' && p === '/v1/chat') {
@@ -353,5 +368,5 @@ export const server = http.createServer(async (req, res) => {
 })
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)} google=${Boolean(google)}${FAKE ? ' FAKE' : ''}`))
+  server.listen(PORT, HOST, () => console.log(`duet server on http://${HOST}:${PORT} model=${MODEL} claude=${Boolean(anthropic)} stt=${Boolean(GROQ_KEY)} google=${Boolean(google)} messages=${Boolean(messages)}${FAKE ? ' FAKE' : ''}`))
 }

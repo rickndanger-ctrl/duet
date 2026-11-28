@@ -85,8 +85,8 @@ duet = new Duet({
   mic: on => glasses.microphone(on),
   transcribe: (pcm, mode, signal) => api.transcribe(server, pcm, mode, signal),
   chat: (conversation, text, context, onEvent, signal) => api.chat(server, conversation, text, context, onEvent, signal),
-  confirm: (id, ok) => api.confirm(server, id, ok),
-  context: () => ({ time: new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', timeZoneName: 'short' }), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(place ? { place } : {}) }),
+  confirm: (id, ok, change) => api.confirm(server, id, ok, change),
+  context: () => (refreshPlace(), { time: new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', timeZoneName: 'short' }), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(place ? { place } : {}) }),
   log,
   onTurn: (turn, phase) => {
     liveTurn = turn;
@@ -170,8 +170,19 @@ async function boot(): Promise<void> {
   glasses.setMenu(menu());
   duet.start();
   if (!ok) { $('phase').textContent = 'glasses not connected'; setTimeout(() => void boot(), 5000); return; }
-  // Rough location (about 10 km) so "what's the weather" just works.
+  void refreshPlace(true);
+}
+
+// Rough location (about 10 km) so "what's the weather" just works. Asked at start and again on later turns
+// (at most every few minutes) if it wasn't ready; the last one is kept so a restart still has it.
+let placeAt = 0;
+async function refreshPlace(force = false): Promise<void> {
+  if (!place) place = await glasses.storage.get('duet.place');
+  if (!force && Date.now() - placeAt < 5 * 60_000) return;
+  placeAt = Date.now();
   const at = await glasses.location();
-  if (at) place = `around latitude ${at.lat.toFixed(1)}, longitude ${at.lon.toFixed(1)}`;
+  if (!at) { log('location not available'); return; }
+  place = `around latitude ${at.lat.toFixed(1)}, longitude ${at.lon.toFixed(1)}`;
+  void glasses.storage.set('duet.place', place);
 }
 void boot();
