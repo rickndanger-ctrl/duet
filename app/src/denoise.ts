@@ -30,14 +30,13 @@ export class VoiceScore {
     this.buf = m._malloc(RN_FRAME * 4);
   }
 
-  /** Loads RNNoise; null if it can't run here (then the VAD works on loudness alone, as before). */
+  private static module: Promise<RnModule | null> | null = null;
+
+  /** Loads RNNoise (once) and gives a fresh scorer; null if it can't run here (then the VAD works on loudness alone). */
   static async load(): Promise<VoiceScore | null> {
-    try {
-      const { default: create } = await import('@jitsi/rnnoise-wasm/dist/rnnoise-sync.js');
-      return new VoiceScore(create() as RnModule);
-    } catch {
-      return null;
-    }
+    VoiceScore.module ??= import('@jitsi/rnnoise-wasm/dist/rnnoise-sync.js').then(m => m.default() as RnModule).catch(() => null);
+    const m = await VoiceScore.module;
+    return m ? new VoiceScore(m) : null;
   }
 
   /** How likely 20 ms of 16 kHz audio (320 samples, int16 scale) is a voice: the louder of its two RNNoise frames. */
