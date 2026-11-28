@@ -25,6 +25,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <label class="toggle"><input type="checkbox" id="wake"> "Hey Duet" wake word</label>
     <label>Mic sensitivity <span id="sens-v"></span><input type="range" id="sens" min="1" max="10" step="1"></label>
     <label>Wait for your reply <span id="follow-v"></span><input type="range" id="follow" min="5" max="60" step="5"></label>
+    <label>Pause before sending <span id="pause-v"></span><input type="range" id="pause" min="2" max="8" step="0.5"></label>
     <details><summary>Server</summary>
       <label>URL<input id="url" autocomplete="off" spellcheck="false"></label>
       <label>Token<input id="token" type="password" autocomplete="off"></label>
@@ -141,12 +142,15 @@ function drawSettings(): void {
   $('sens-v').textContent = String(duet.settings.sensitivity);
   ($('follow') as HTMLInputElement).value = String(duet.settings.followUpMs / 1000);
   $('follow-v').textContent = `${duet.settings.followUpMs / 1000} s`;
+  ($('pause') as HTMLInputElement).value = String(duet.settings.pauseMs / 1000);
+  $('pause-v').textContent = `${duet.settings.pauseMs / 1000} s`;
   ($('url') as HTMLInputElement).value = server.url;
   ($('token') as HTMLInputElement).value = server.token;
 }
 $('wake').addEventListener('change', e => setWake((e.target as HTMLInputElement).checked));
 $('sens').addEventListener('input', e => { duet.setSensitivity(Number((e.target as HTMLInputElement).value)); drawSettings(); void save(); });
 $('follow').addEventListener('input', e => { duet.settings.followUpMs = Number((e.target as HTMLInputElement).value) * 1000; drawSettings(); void save(); });
+$('pause').addEventListener('input', e => { duet.setPause(Number((e.target as HTMLInputElement).value) * 1000); drawSettings(); void save(); });
 $('url').addEventListener('change', e => { server.url = (e.target as HTMLInputElement).value.trim(); void save(); });
 $('token').addEventListener('change', e => { server.token = (e.target as HTMLInputElement).value.trim(); void save(); });
 $('new').addEventListener('click', newConversation);
@@ -165,6 +169,7 @@ async function boot(): Promise<void> {
     const saved = JSON.parse((await glasses.storage.get('duet.settings')) || '{}');
     for (const k of Object.keys(DEFAULT_SETTINGS) as (keyof typeof DEFAULT_SETTINGS)[]) if (saved[k] !== undefined) (duet.settings as unknown as Record<string, unknown>)[k] = saved[k];
     duet.setSensitivity(duet.settings.sensitivity);
+    duet.setPause(duet.settings.pauseMs);
     if (saved.url) server.url = saved.url;
     if (saved.token) server.token = saved.token;
   } catch { /* first run */ }

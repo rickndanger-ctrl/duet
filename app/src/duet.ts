@@ -33,9 +33,11 @@ export interface DuetSettings {
   followUpMs: number;
   /** A new conversation starts when the last turn is older than this. */
   memoryMs: number;
+  /** Once you've been talking a while, how long a pause (finding the words) can last before what you said is sent. */
+  pauseMs: number;
 }
 
-export const DEFAULT_SETTINGS: DuetSettings = { wakeWord: true, sensitivity: 6, followUpMs: 20_000, memoryMs: 10 * 60_000 };
+export const DEFAULT_SETTINGS: DuetSettings = { wakeWord: true, sensitivity: 6, followUpMs: 20_000, memoryMs: 10 * 60_000, pauseMs: 3500 };
 const WAKE_MAX_SPEECH_MS = 6000;
 /** A short reply ("Okay.") counts when the mic heard at least this much speech (Whisper invents "Okay." from noise). */
 const SHORT_REPLY_SPEECH_MS = 300;
@@ -43,6 +45,9 @@ const SHORT_REPLY_SPEECH_MS = 300;
 const JOIN_MS = 6000;
 /** Silence that ends what you say. Longer than a breath between phrases. */
 const TALK_END_SILENCE_MS = 1000;
+/** Talking a while (a paragraph, not a quick question): a pause to find the words has to last settings.pauseMs
+ *  (3.5 s by default, what felt right on the glasses) to send it. A tap sends at once. */
+const TALK_LONG_AFTER_MS = 2500;
 const LONG_HEARING_MS = 20_000;
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
@@ -132,6 +137,12 @@ export class Duet {
     if (!this.awake) this.sleep();
   }
 
+  /** How long a pause mid-paragraph can last before what you said is sent (2-8 s). */
+  setPause(ms: number): void {
+    this.settings.pauseMs = Math.min(8000, Math.max(2000, ms || DEFAULT_SETTINGS.pauseMs));
+    if (this.vad.options.longAfterMs !== Infinity) this.vad.options.longEndSilenceMs = this.settings.pauseMs;
+  }
+
   setSensitivity(level: number): void {
     this.settings.sensitivity = level;
     this.vad.options.sensitivity = level;
@@ -154,6 +165,7 @@ export class Duet {
     clearTimeout(this.followTimer);
     this.vad.reset();
     this.vad.options.endSilenceMs = 500;
+    this.vad.options.longAfterMs = Infinity;
     this.greeting = '';
     this.setPhase(this.settings.wakeWord ? 'armed' : 'asleep');
     void this.syncMic();
@@ -164,6 +176,8 @@ export class Duet {
     this.gen++;
     this.vad.reset();
     this.vad.options.endSilenceMs = TALK_END_SILENCE_MS;
+    this.vad.options.longAfterMs = TALK_LONG_AFTER_MS;
+    this.vad.options.longEndSilenceMs = this.settings.pauseMs;
     if (fromTap && (!this.turn || Date.now() - this.lastTurnAt > this.settings.memoryMs)) this.greeting = "I'm listening. Go ahead.";
     this.setPhase(this.turn ? 'your-turn' : 'listening');
     this.armFollowUp();
@@ -325,6 +339,8 @@ export class Duet {
     this.d.log(`answer done ${Math.round(performance.now() - t0)} ms`);
     // Your turn: the mic is already on, just talk.
     this.vad.options.endSilenceMs = TALK_END_SILENCE_MS;
+    this.vad.options.longAfterMs = TALK_LONG_AFTER_MS;
+    this.vad.options.longEndSilenceMs = this.settings.pauseMs;
     this.setPhase('your-turn', true);
     this.armFollowUp();
     void this.syncMic();
@@ -349,6 +365,7 @@ export class Duet {
     this.scroll = null;
     this.vad.reset();
     this.vad.options.endSilenceMs = 600;
+    this.vad.options.longAfterMs = Infinity;
     this.setPhase('confirm', true, req.verb);
     void this.syncMic();
   }

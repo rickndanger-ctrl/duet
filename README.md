@@ -54,7 +54,8 @@ G2 mic (16 kHz PCM, while Duet is open)
   Claude's answer with a tiny Claude beside it. As soon as you start talking, a "ME …" line shows that Duet hears you.
 - **Wake**: say "Hey Duet" (works with the question in the same breath), or tap the temple / ring.
 - **Turn-taking**: the end of your sentence (a second of silence) is the send button. Pause mid-thought and carry on
-  before Claude answers, and it stays one message. Talking over an answer interrupts it. Short replies like "Okay."
+  before Claude answers, and it stays one message. Once you've been talking a few seconds, a pause to find the words
+  can last 3.5 s (set 2-8 s with "Pause before sending" on the phone screen); a tap sends at once. Talking over an answer interrupts it. Short replies like "Okay."
   count when the mic clearly heard them.
 - **Confirm**: every write shows the exact draft and waits. Say "yes" / "send it" or tap to confirm.
   Say "no" or double tap to cancel. No answer in 60 s means cancel. "Okay" doesn't count as yes,

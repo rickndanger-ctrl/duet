@@ -12,6 +12,9 @@ export const FRAME_MS = 20;
 export interface VadOptions {
   /** Silence that ends an utterance. */
   endSilenceMs: number;
+  /** Once you've been talking this long (pauses included), a pause has to last `longEndSilenceMs` to end it (thinking mid-paragraph). */
+  longAfterMs: number;
+  longEndSilenceMs: number;
   /** Shortest speech kept (coughs and taps are dropped). */
   minSpeechMs: number;
   /** Longest utterance; it is cut and sent at this length. */
@@ -22,7 +25,7 @@ export interface VadOptions {
   sensitivity: number;
 }
 
-export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, minSpeechMs: 160, maxSpeechMs: 30_000, prerollMs: 300, sensitivity: 6 };
+export const DEFAULT_VAD: VadOptions = { endSilenceMs: 800, longAfterMs: Infinity, longEndSilenceMs: 800, minSpeechMs: 160, maxSpeechMs: 60_000, prerollMs: 300, sensitivity: 6 };
 
 /** Frames of the room kept to find its quietest moment (2 s). */
 const ROOM_FRAMES = 100;
@@ -132,7 +135,9 @@ export class Vad {
     else this.voice *= 0.997;
     if (this.voicedRun > 0) this.speechMs += FRAME_MS;
     if (this.voicedRun >= VOICE_FRAMES) this.quietMs = 0; else this.quietMs += FRAME_MS;
-    if (this.quietMs >= this.options.endSilenceMs || this.speechMs + this.quietMs >= this.options.maxSpeechMs) this.finish(false);
+    const talkedMs = this.utterance.length * FRAME_MS - this.options.prerollMs; // since you started, pauses included
+    const endAfter = talkedMs - this.quietMs >= this.options.longAfterMs ? Math.max(this.options.endSilenceMs, this.options.longEndSilenceMs) : this.options.endSilenceMs;
+    if (this.quietMs >= endAfter || this.speechMs + this.quietMs >= this.options.maxSpeechMs) this.finish(false);
   }
 
   /** Noise floor: follows the room down fast and up slowly, and never sits under the quietest frame of the last 2 s. */

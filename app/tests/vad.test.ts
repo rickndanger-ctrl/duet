@@ -78,3 +78,19 @@ test('the corner clock shows the date and time, and fits beside the buddy', () =
   assert.ok(c.length <= 24, c);
   assert.equal(statusLine('armed'), 'PAUSED · "Hey Duet"');
 });
+
+test('a pause to find the words mid-paragraph (up to 3.5 s) does not send it; a quick question still goes after 1 s', () => {
+  const run = (talkSec: number, pauseSec: number) => {
+    const ends: number[] = [];
+    let t = 0;
+    const vad = new Vad({ onUtterance: () => ends.push(t) }, { endSilenceMs: 1000, longAfterMs: 2500, longEndSilenceMs: 3500 });
+    const sig = [...noise(SR, 40), ...sentence(talkSec), ...noise(Math.round(pauseSec * SR), 40), ...sentence(1.5), ...noise(4 * SR, 40)];
+    const pcm = Int16Array.from(sig, v => Math.max(-32768, Math.min(32767, Math.round(v))));
+    const bytes = new Uint8Array(pcm.buffer);
+    for (let i = 0; i < bytes.length; i += 1280) { t = i / 2 / SR; vad.push(bytes.slice(i, i + 1280)); }
+    return ends.length;
+  };
+  assert.equal(run(5, 3), 1, 'a long talk with a 3 s pause stays one message');
+  assert.equal(run(5, 4.5), 2, 'a 4.5 s pause after a long talk sends it');
+  assert.equal(run(1.5, 1.8), 2, 'a quick question is sent after 1 s of quiet');
+});
